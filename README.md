@@ -4,7 +4,3 @@ This is a completely new domain for me, so I am writing all my notes/documentati
 
 ## Reason for making this
 I plan on making an autonomous delivery drone in the future, so exploring these will help me in the drone's implementation later.
-
-from ursina.prefabs import Button
-
-Button will import everything from ursina. 
