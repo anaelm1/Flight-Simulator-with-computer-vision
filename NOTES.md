@@ -145,3 +145,10 @@ sun.look_at(Vec3(1, -1, 1))
 bullet_glow = PointLight(position=Vec3(0, 2, 0), color=color.red)
 
 4. Spot Light (flashlight): Cone of light in a specific direction from a specific point. 
+
+
+drone.up = this returns the vec3 vector which is pointing straight out of the local top of the drone. 
+
+same for down, forward, back, left, right.s
+
+clamp is used for ranges. 

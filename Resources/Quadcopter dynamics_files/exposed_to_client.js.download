@@ -1,0 +1,36 @@
+
+      if (!window.Scribd) Scribd = {};
+      Scribd.Brand = 'scribd';
+      Scribd.Sentry = {"disabled":false,"dsn":"https://21588782029b459685064c03453673ff@sentry.io/282187","environment":"production","page":"options","release":"c8a65706a25b4035a05ac102c88859b1bdc6cbc8","queue":{"errors":[],"messages":[]}};
+      
+      (function(h,o,u,n,d){h=h[d]=h[d]||{q:[],onReady:function(c){h.q.push(c)}};d=o.createElement(u);d.async=1;d.src=n;n=o.getElementsByTagName(u)[0];n.parentNode.insertBefore(d,n)})(window,document,'script','https://www.datadoghq-browser-agent.com/us1/v5/datadog-logs.js','DD_LOGS');
+      window.DD_LOGS.onReady(function(){
+        if (window.DD_LOGS.getInitConfiguration()) return;
+        var seen = {};
+        window.DD_LOGS.init({
+          clientToken: 'puba93cb01f5c7d6a8163631bbd7ce20349',
+          site: 'datadoghq.com',
+          forwardConsoleLogs: ['warn'],
+          forwardErrorsToLogs: false,
+          sessionSampleRate: 1,
+          service: 'web-' + Scribd.Brand,
+          env: Scribd.Sentry.environment,
+          version: Scribd.Sentry.release,
+          beforeSend: function(log, context){
+            if (log.origin !== 'console') return true;
+            var stack = (context && context.handlingStack) || '';
+            if (/-extension:\/\//.test(stack)) return false;
+            var msg = log.message || '';
+            var allowed = stack
+              ? (/\.scribdassets\.com/.test(stack) || /statsig/i.test(stack) || /statsig/i.test(msg))
+              : /statsig/i.test(msg);
+            if (!allowed) return false;
+            if (seen[msg]) return false;
+            seen[msg] = true;
+            return true;
+          }
+        });
+        window.DD_LOGS.setGlobalContextProperty('page', Scribd.Sentry.page);
+      });
+    
+    
