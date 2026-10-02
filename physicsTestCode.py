@@ -1,61 +1,150 @@
 #trying to test out physics stuff I js learned 
 from ursina import *
 app = Ursina()
+import math 
+
+#keeps the angles between -180 and 180
+def angleRange(angle):
+    return (angle + 180) % 360 - 180 
 
 #Global stuff:
 m = 1 #kg
 g = 9.81 #m/s^2
 v = Vec3(0, 0, 0)
-k = 3 #drag coefficient. This needs to be calculated but Im using a random value of 0.3 rightnow 
+Ang_v_RAD = Vec3(0, 0, 0) # rad/s . angular velocity 
+k = 0.3 #drag coefficient. This needs to be calculated but Im using a random value of 0.3 rightnow 
 T = 0.0 #Thrust level
+L = 0.1 #m . This is each arms length. It is being used to calculate torque.
+torque = Vec3(0, 0, 0)
+k_rot = 0.33 #rotatinal drag coeefficent. formula in notes 
+#Moment of intertia . formulas in notes. Currently the object is 1x1x1 m. 
+I_x = 0.167
+I_y = 0.167
+I_z = 0.167 
+I = Vec3(I_x, I_y, I_z)
+RAD_TO_DEG = 180.0 / math.pi
+torque_applied = Vec3(0, 0, 0)
+P = 8.0 #constant with which we pull towards target angle
+D = 1.2 #damping coefficient so the angle change is smooth
+P_yaw = 6.0
+D_yaw = 1.0 
+max_tilt = math.radians(20.0) #max the drone can tilt to a side
+target_yaw_rad = 0.0 #this is the default position of a drone 
 
-plane = Entity(model='plane', scale=(20,1,20), color=color.green)
+plane = Entity(model='plane', scale=(30, 1, 30), color=color.green)
 
 camera.position = (0, 5, -20)
 camera.rotation_x = 10
 
 drone = Entity(model='cube', color=color.orange)
-drone.mass = m
+drone.mass = m 
+drone.position_y = 0.5 
+
+hud = Text(text="", position=(-0.85, 0.45))
 
 def update():
-    global T, v #Global variables are required to be declared inside the func
+    #To follow the drone
+    camera.position = drone.position + Vec3(0, 5, -15)
+    camera.look_at(drone)
+
+    global T, v, Ang_v_RAD, torque_applied, target_yaw_rad #Global variables are required to be declared inside the func
     #Here will be the physics implementation
 
-    thrust_rate = 10
-    pitch_speed = 60.0
-    roll_speed = 60.0
-    yaw_speed = 40.0
+    #This is the reset key 
+    if held_keys['r']:  
+        drone.position = Vec3(0, 0.5, 0)
+        drone.rotation = Vec3(0, 0, 0)
+        v = Vec3(0, 0, 0)
+        Ang_v_RAD = Vec3(0, 0, 0)
+        T = 0.0
 
-    #Thrust control
+    thrust_rate = 10
+    torque_strength = 0.5 
+
+    #Thrust control 
     T += held_keys["space"] * time.dt * thrust_rate
     T -= held_keys["shift"] * time.dt * thrust_rate
     T = clamp(T, 0, 20)
 
-    drone.rotation_x += pitch_speed * time.dt * held_keys['w']
-    drone.rotation_x -= pitch_speed * time.dt * held_keys['s']
+    #Yaw stabalization
+    current_angle_yaw = math.radians(angleRange(drone.rotation_y))
+    yaw_input = held_keys['d'] - held_keys['a']
 
-    drone.rotation_z += roll_speed * time.dt * held_keys['a']
-    drone.rotation_z -= roll_speed * time.dt * held_keys['d']
+    if yaw_input != 0:
+        torque_applied.y = yaw_input * torque_strength
+        target_yaw_rad = current_angle_yaw
+    else: 
+        #This will calculate shortest distance between target and current and then put it in the torque.y 
+        angle_diff = target_yaw_rad - current_angle_yaw
+        yaw_error = math.atan2(math.sin(angle_diff), math.cos(angle_diff))
+        torque_applied.y = (yaw_error * P_yaw) - (Ang_v_RAD.y * D_yaw)
 
-    drone.rotation_y -= yaw_speed * time.dt * held_keys['q']
-    drone.rotation_y += yaw_speed * time.dt * held_keys['e']
-        
-    
+    #stabalization
+    current_angle_pitch = math.radians(angleRange(drone.rotation_x))
+    current_angle_roll = math.radians(angleRange(drone.rotation_z))
+
+    target_angle_pitch = (held_keys['w'] - held_keys['s']) * max_tilt  # X-axis (Pitch)
+    target_angle_roll =  (held_keys['e'] - held_keys['q']) * max_tilt  # Z-axis (roll)
+
+    error_pitch = target_angle_pitch - current_angle_pitch
+    error_roll = target_angle_roll - current_angle_roll
+
+    torque_applied.x = (error_pitch * P) - (Ang_v_RAD.x * D)
+    torque_applied.z = (error_roll * P) - (Ang_v_RAD.z * D)
+
+    torque_drag = -Ang_v_RAD * k_rot #Ang_v_RAD is the max angular rotation. It means the top rotation speed will be about 170 deg / s 
+
+    torque_net = torque_applied + torque_drag
+
+    ang_acceleration = Vec3(
+        torque_net.x / I.x,
+        torque_net.y / I.y, 
+        torque_net.z / I.z
+    ) #f=ma for rotational
+
+    Ang_v_RAD = Ang_v_RAD + (ang_acceleration * time.dt)
+
+    Ang_v_DEG = Ang_v_RAD * RAD_TO_DEG #the unit is deg/s for each axis
+
+    drone.rotation_x += Ang_v_DEG.x * time.dt   # Pitch
+    drone.rotation_y += Ang_v_DEG.y * time.dt  # Yaw
+    drone.rotation_z += Ang_v_DEG.z * time.dt  # Roll
+
     #Forces calculation
     f_gravity = Vec3(0, -drone.mass * 9.81, 0)
     f_thrust = drone.up * T #thrust and drag apply in all directions that's why
     f_drag = -v * k         #they will be added universally while gravity is only for down
+    '''
+    #trying to add a soft landing mechanism
+    if drone.y < 2 and v.y < 0:
+        target_v = -0.5 * drone.y #slowing drone down gradually 
+        f_thrust.y  = (((target_v-v.y)/time.dt) * drone.mass) - f_gravity - f_drag
+        f_thrust.y = clamp(f_thrust.y, -drone.mass * 20, drone.mass * 20)
+    '''
     f_net = f_thrust + f_gravity + f_drag
 
     #We will use acceleration to get velocity 
     acceleration = f_net/ drone.mass #f = ma
-    v += acceleration * time.dt #Eular Numerical part 
+    v += acceleration * time.dt #Eular Numerical part    
     drone.position += v * time.dt #Eular Numerical part 
-    print(v)
 
     #if it collides with the ground
-    if drone.y < 0:
-        drone.y = 0
-        v = Vec3(0, 0, 0)
+    if drone.y < 0.5:
+        drone.y = 0.5
+        if v.y < 0: #check for if vertical component is pointing downwards
+            v.y = 0 
+        v.x *= 0.9 #slowly resetting velocity of other axis as well
+        v.z *= 0.9 
+        Ang_v_RAD *= 0.1 #This reduces the angular velocity by 10% every frame it is touching the ground
 
-app.run() 
+    hud.text = f"""
+    Thrust: {T:.1f} N
+    Linear Vel: ({v.x:.1f}, {v.y:.1f}, {v.z:.1f}) m/s
+    Angular Vel: ({Ang_v_DEG.x:.0f}, {Ang_v_DEG.y:.0f}, {Ang_v_DEG.z:.0f}) deg/s
+    Position: ({drone.world_x:.0f}, {drone.world_y:.0f}, {drone.world_z:.0f})
+    Orientation: ({drone.rotation_x:.0f}, {drone.rotation_y:.0f}, {drone.rotation_z:.0f}) deg
+    """
+
+app.run()  
+
+

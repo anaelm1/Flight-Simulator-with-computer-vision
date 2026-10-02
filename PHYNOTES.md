@@ -76,6 +76,70 @@ The sequence, in my own words, is:
     4. Use all 3 to calculate net force 
     5. Get acceleration using f = ma
     6. Get velocity using acceleration * time 
-    7. Finally get drone position by adding distance moved (velocity * time) into the drone vector 
+    7. Finally get drone position by adding distance moved (velocity * time) into the drone vector  
 
-About pitch, roll, yaw: Angular velocity should be used instead of direct keys as in real life the drone won't just stop and will instead slowly come to stop. For now I have added basic key press rotation which works cuz we are using drone.up whhich includes the new direction. 
+About pitch, roll, yaw: Angular velocity should be used instead of direct keys as in real life the drone won't just stop and will instead slowly come to stop. For now I have added basic key press rotation which works cuz we are using drone.up whhich includes the new direction.  
+
+Angular Vecocity: 
+It is same as linear except different variables. It is defined as the ratio of angular displacement to time taken.
+position turns into angle 
+linear velocity turns into angular velocity 
+force turns into torque
+mass turns into moment of intertia 
+linear drag turns into rotational drag
+
+Steps for it:
+1. Calculate torque from eacha axis 
+2. Calcualte rotational drag whic is k_rot = linear drag x angular velocity 
+3. Calculate net torque by adding both 
+4. Caculate angualr acceleration which is torque/moment of inertia (same as f=ma)
+5. Update angular velocity which is old velocity + (acceleration x delta t)
+6. update rotation angle wwhich is old angle + (new velocity x delta t)
+
+Torque = distance from pivot * force * sin(angle betweeen force and lever arm)
+but gemini instead is telling me to just increment on key presses etc. 
+
+k_rot = torque / max angular velocity
+
+Moment of intertia (I): This is like the mass for rotations. It has a formula for each axis which uses mass, width, height, depth. 
+I_x = 1/12 * m * (h^2 + d^2) 
+I_y = 1/12 * m * (w^2 + d^2) 
+I_z = 1/12 * m * (w^2 + h^2) 
+
+IMP SHIT: Ursina calculates in deg while the formulas use radians so I need to change. 
+
+I have so far implemented the base system which is extremely sensitive and making it hard for me to control. That's why an active flight controller (stabilization system) is needed. 
+
+## Stabilization system:
+I will do stabilization using angle mode. In this, we change our keys from how fast the drone spins (raw physics) to what angle does the drone tilt.
+
+This is the current system:
+if we press W, the drone will pitch forward and spin faster and faster
+when we release, the  torque increment stops but the drone still stays tilted
+
+It works like this:
+if we press W, the drone will tilt forward at an angle and hold it
+when we will release, the angle will go back to 0 
+This works like a rubber band
+
+Steps to do:
+1. Get angles and use to find the angle of error meaning where the difference between the where the drone wants to be and where it currently is. 
+target angle = key input * max tilt angle (can be any degrees)
+angle error = target angle -  current angle
+2. Calculate the correction torque by error angle * P. P is a strength factor which makes it harder for the drone to tilt so that it doesn't slam.
+3. Add damping by final torque = correction torque - (angular velocity * damping coefficent).
+
+Also in this the yaw is not included cuz we always wanna see the drone be top facing when we are not doing anything. 
+For yaw, I wil add a head-locking controller. In this, if the yaw keys are pressed it will tilt but if not then it will calculate shortest angular distance between target (always be 0) and current target and apply it on the torque. So, in this way the drone will straighten out. We are using trigonometry to calculate the distance and its just copy paste. 
+
+I tried writting a soft landing code but Im gonna leave it in todo. 
+
+## 4 rotor motor physics
+The next step is to split the thrust in 4 individual motors. The flight controller needs to calculate each motors commands so that they naturally produce the thrust, pitch, roll, yaw. 
+
+Motor 1 (front right) spins ACW 
+Motor 2 (rear right) spins CW
+motor 3 (rear left) spins ACW
+motor 4 (front left) spins CW    
+
+Lets first study about the physics of each rotor
