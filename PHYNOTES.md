@@ -133,13 +133,74 @@ Also in this the yaw is not included cuz we always wanna see the drone be top fa
 For yaw, I wil add a head-locking controller. In this, if the yaw keys are pressed it will tilt but if not then it will calculate shortest angular distance between target (always be 0) and current target and apply it on the torque. So, in this way the drone will straighten out. We are using trigonometry to calculate the distance and its just copy paste. 
 
 I tried writting a soft landing code but Im gonna leave it in todo. 
-
+ 
 ## 4 rotor motor physics
 The next step is to split the thrust in 4 individual motors. The flight controller needs to calculate each motors commands so that they naturally produce the thrust, pitch, roll, yaw. 
 
-Motor 1 (front right) spins ACW 
-Motor 2 (rear right) spins CW
+Motor 1 (rear right) spins CW 
+Motor 2 (front right) spins ACW
 motor 3 (rear left) spins ACW
 motor 4 (front left) spins CW    
 
-Lets first study about the physics of each rotor
+To keep the drone from spinning in circles, two motors spin CW and two spin ACW.
+
+## Lets first study about the physics of each rotor:
+Each motor has a rotationl speed (rad/s)
+It generates 2 outputs from the square of this speed 
+1. Aerodynamic Thrust Force: k * rotationl speed^2 (This pushes the drone upwards)
+2. Reaction Drag Torque: k * rotational speed^2 (Due to Newton's third law, when we spin the propeller it produes a counter torque in the opposite direction)
+(k is the thrust coefficient and K is the is moment coefficient)
+
+I should make a function of the flight controller. It will input the desired total thrust and desired axis torques and then split it into the 4 motor forces.
+The formula goes smthg like this:
+
+d is the distance from center to arm along each axis. 
+d = L/underroot(2)
+but for y axis (yaw) it isn't needed beacuse it works on counter torque balance CW and ACW motors 
+
+cq is the torque to thrust ratio calculated by k/k (first is moment second is thrust). torque one will be smaller cuz it measures the drag. 
+
+
+The sign change depending on the motors position 
+F1 = T/4 + torquex/4d - torquez/4d + torquey/4cq
+F2 = T/4 - torquex/4d - torquez/4d - torquey/4cq
+F3 = T/4 + torquex/4d + torquez/4d - torquey/4cq
+f4 = t/4 - torquex/4d + torquez/4d + torquey/4cq
+
+RMP spin latency: Electric motros can't change their RPM (revolutions per minute) instantly due to rotor intertia. We add that lag with a constant time (0.03 s) but for the inertia one we use this formula:
+motor acceleration rate = (target speed - current speed) / motor time constant
+In python we will use this one:
+motor speed += ((cmd_speed - motor_speed) / motor_time_constant) * time.dt
+
+cmd_speed is target speed requested by controller       
+motor_soeed is actual speed
+Speed error is calculated by both
+motor_time_constant is lag 
+This formula will allow the rpm to increase exponentially when needed otherwise slowly 
+
+## Enivronmental physics
+I now need to add environmental variables
+1. drag: This will oppose the final velocity. 
+relative velocty = drone velocity - wind velocity 
+wind velocity will be 
+2. Body drag eqn: -0.5p * Cd * A * |relative v| * relative v
+p is air density, 1.225 kg/m3
+Cd is drag coefficent 
+A is cross sectional area
+3. Wind velocity = steady velocity + gust velocity + turbulence velocity 
+steady velocity will be constant. smtg like 5 m/s facing east
+gust velocity will be periodic igh intensity force burst. We will use 1 - cosine for this. 
+The formual is: gust at time t = (max gust intensity/2)(1 - cos(2pi*t/T))
+t is time elapsed since gust started
+T is total gust duration
+
+turbulence velocity will be chaotic high freq changes. Will use standard aerospace models like the dryden turbulene model (don't know what that is yet)
+
+Last thing: Air density will scale from both thrust and torque drag.
+thrust/(thrust cofficient * anguar velocity^2) = p 
+drag torque/(drag cofficient * anguar velocity^2) = p 
+
+In order to implement I will: 
+1. Calculate wind velocity first 
+2. Calculate relative velocity
+3. change current body drag f_drag = -v * k into body drag eqn

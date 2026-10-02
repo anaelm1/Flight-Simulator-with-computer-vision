@@ -7,29 +7,110 @@ import math
 def angleRange(angle):
     return (angle + 180) % 360 - 180 
 
-#Global stuff:
+#Global Variables:
 m = 1 #kg
 g = 9.81 #m/s^2
 v = Vec3(0, 0, 0)
 Ang_v_RAD = Vec3(0, 0, 0) # rad/s . angular velocity 
-k = 0.3 #drag coefficient. This needs to be calculated but Im using a random value of 0.3 rightnow 
+
+k = 0.3 #drag coefficient. Random Value for now
 T = 0.0 #Thrust level
-L = 0.1 #m . This is each arms length. It is being used to calculate torque.
+L = 0.1 #m .Arms length.
+d = L/math.sqrt(2) #prependicular arm distance to the x and z axis
+k_thrust = 1 #thrust coefficient. Random value for now 
+k_torque = 0.02 #torque coefficent. Random value for now 
+k_motordrag = 0.1 #Motor drag coefficent. Random value for now 
+motor_responsetime = 0.02 #motor lag . Random value rightnow
+motor_speed_array = [0.0, 0.0, 0.0, 0.0] #rad/s for each motor. m1, m2, m3, m4
+
 torque = Vec3(0, 0, 0)
-k_rot = 0.33 #rotatinal drag coeefficent. formula in notes 
-#Moment of intertia . formulas in notes. Currently the object is 1x1x1 m. 
-I_x = 0.167
-I_y = 0.167
-I_z = 0.167 
-I = Vec3(I_x, I_y, I_z)
-RAD_TO_DEG = 180.0 / math.pi
+k_drag = 0.3 #rotatinal drag coeefficent.
+I_x = 0.167 #Moment of intertia x
+I_y = 0.167 #Moment of intertia y
+I_z = 0.167 #Moment of intertia z
+I = Vec3(I_x, I_y, I_z) #Moment of intertia
 torque_applied = Vec3(0, 0, 0)
+
+RAD_TO_DEG = 180.0 / math.pi
+
 P = 8.0 #constant with which we pull towards target angle
-D = 1.2 #damping coefficient so the angle change is smooth
+D = 1.2 #damping coefficient 
 P_yaw = 6.0
 D_yaw = 1.0 
 max_tilt = math.radians(20.0) #max the drone can tilt to a side
 target_yaw_rad = 0.0 #this is the default position of a drone 
+
+#Environmentals
+wind_steady_velocity = Vec3(5, 0, 0) #5 m/s horizontal wind blowing from west to east across the map
+wind_gust_velocity = Vec3(0, 0, 0)
+gust = False
+cooldown_time = random.uniform(3.0, 10.0)
+active_timer = 0.0 
+direction_gust = Vec3(0, 0, 0)
+Time_gust = 0
+
+def environmentals():
+    global wind_gust_velocity, gust, cooldown_time, active_timer, direction_gust, Time_gust
+     
+    #The formula for gust is in the notes 
+    if not gust:
+        cooldown_time -= time.dt
+        wind_gust_velocity = Vec3(0, 0, 0)
+        
+        if cooldown_time <= 0:
+            gust = True 
+            active_timer = 0.0 
+            Velocity_gust = random.uniform(3.0, 8.0) #gust speed
+            Time_gust = random.uniform(1.0, 10.0) #gust duration
+            direction_gust = Vec3(2, 0, 0) #unit vector
+    else:
+        active_timer += time.dt
+        if active_timer >= Time_gust:
+            gust = False
+            cooldown_timer = random.uniform(3.0, 10.0)
+            wind_gust_velocity = Vec3(0, 0, 0)
+        else:
+            V_curent = (Velocity_gust/2) * (1 - math.cos(2.0*math.pi* (active_timer/Time_gust)))
+            wind_gust_velocity = V_curent * direction_gust
+
+#Motor manager - ESC(Electronic Speed Controller)
+def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
+    global motor_speed_array, Ang_v_RAD
+    #Using the formula mentioned in notes to calculate each motors force
+    Cq = k_torque / k_thrust
+    force_motor_1 = T/4 + (torque_applied_x/(4*d)) - (torque_applied_z/(4*d)) + (torque_applied_y/(4*Cq))
+    force_motor_2 = T/4 - (torque_applied_x/(4*d)) - (torque_applied_z/(4*d)) - (torque_applied_y/(4*Cq))
+    force_motor_3 = T/4 + (torque_applied_x/(4*d)) + (torque_applied_z/(4*d)) - (torque_applied_y/(4*Cq))
+    force_motor_4 = T/4 - (torque_applied_x/(4*d)) + (torque_applied_z/(4*d)) + (torque_applied_y/(4*Cq))
+        
+    force_motor_1 = clamp(force_motor_1, 0, 20)
+    force_motor_2 = clamp(force_motor_2, 0, 20)
+    force_motor_3 = clamp(force_motor_3, 0, 20)
+    force_motor_4 = clamp(force_motor_4, 0, 20)
+
+    #Converts force in newtons to angular velocity in rad/s
+    angular_v_motor_1 = math.sqrt(force_motor_1/k_thrust)
+    angular_v_motor_2 = math.sqrt(force_motor_2/k_thrust)
+    angular_v_motor_3 = math.sqrt(force_motor_3/k_thrust)
+    angular_v_motor_4 = math.sqrt(force_motor_4/k_thrust)
+
+    #Calculate the lag in each angular velocity and add the speed to the speed arrray
+    motor_speed_array[0] += ((angular_v_motor_1 - motor_speed_array[0]) / motor_responsetime) * time.dt
+    motor_speed_array[1] += ((angular_v_motor_2 - motor_speed_array[1]) / motor_responsetime) * time.dt
+    motor_speed_array[2] += ((angular_v_motor_3 - motor_speed_array[2]) / motor_responsetime) * time.dt
+    motor_speed_array[3] += ((angular_v_motor_4 - motor_speed_array[3]) / motor_responsetime) * time.dt
+
+    #Converting speeds into motion again but this time with the new speed values
+    F1 = k_thrust * (motor_speed_array[0]) ** 2
+    F2 = k_thrust * (motor_speed_array[1]) ** 2
+    F3 = k_thrust * (motor_speed_array[2]) ** 2
+    F4 = k_thrust * (motor_speed_array[3]) ** 2
+    f_total = F1 + F2 + F3 + F4 
+    torque_x = d * (F1 + F3 - F2 - F4) #real motors(m1, m3) push the tail up
+    torque_z = d * (F3 + F4 - F1 - F2) #left motors(m3, m4) roll the drone right
+    torque_y = k_torque * ((motor_speed_array[0]**2) + (motor_speed_array[3]**2) - (motor_speed_array[1]**2) - (motor_speed_array[2]**2))
+
+    return f_total, torque_x, torque_y, torque_z
 
 plane = Entity(model='plane', scale=(30, 1, 30), color=color.green)
 
@@ -47,7 +128,7 @@ def update():
     camera.position = drone.position + Vec3(0, 5, -15)
     camera.look_at(drone)
 
-    global T, v, Ang_v_RAD, torque_applied, target_yaw_rad #Global variables are required to be declared inside the func
+    global T, v, Ang_v_RAD, torque_applied, target_yaw_rad, motor_speed_array #Global variables are required to be declared inside the func
     #Here will be the physics implementation
 
     #This is the reset key 
@@ -57,6 +138,7 @@ def update():
         v = Vec3(0, 0, 0)
         Ang_v_RAD = Vec3(0, 0, 0)
         T = 0.0
+        motor_speed_array = [0.0, 0.0, 0.0, 0.0]
 
     thrust_rate = 10
     torque_strength = 0.5 
@@ -68,7 +150,7 @@ def update():
 
     #Yaw stabalization
     current_angle_yaw = math.radians(angleRange(drone.rotation_y))
-    yaw_input = held_keys['d'] - held_keys['a']
+    yaw_input = held_keys['a'] - held_keys['d']
 
     if yaw_input != 0:
         torque_applied.y = yaw_input * torque_strength
@@ -92,15 +174,13 @@ def update():
     torque_applied.x = (error_pitch * P) - (Ang_v_RAD.x * D)
     torque_applied.z = (error_roll * P) - (Ang_v_RAD.z * D)
 
-    torque_drag = -Ang_v_RAD * k_rot #Ang_v_RAD is the max angular rotation. It means the top rotation speed will be about 170 deg / s 
+    actual_f_total, torque_applied.x, torque_applied.y, torque_applied.z = ESC(T, torque_applied.x, torque_applied.y, torque_applied.z)
+
+    torque_drag = -Ang_v_RAD * k_drag #Ang_v_RAD is the max angular rotation. It means the top rotation speed will be about 170 deg / s 
 
     torque_net = torque_applied + torque_drag
 
-    ang_acceleration = Vec3(
-        torque_net.x / I.x,
-        torque_net.y / I.y, 
-        torque_net.z / I.z
-    ) #f=ma for rotational
+    ang_acceleration = Vec3(torque_net.x / I.x, torque_net.y / I.y, torque_net.z / I.z) #f=ma for rotational
 
     Ang_v_RAD = Ang_v_RAD + (ang_acceleration * time.dt)
 
@@ -112,15 +192,8 @@ def update():
 
     #Forces calculation
     f_gravity = Vec3(0, -drone.mass * 9.81, 0)
-    f_thrust = drone.up * T #thrust and drag apply in all directions that's why
+    f_thrust = drone.up * actual_f_total #thrust and drag apply in all directions that's why
     f_drag = -v * k         #they will be added universally while gravity is only for down
-    '''
-    #trying to add a soft landing mechanism
-    if drone.y < 2 and v.y < 0:
-        target_v = -0.5 * drone.y #slowing drone down gradually 
-        f_thrust.y  = (((target_v-v.y)/time.dt) * drone.mass) - f_gravity - f_drag
-        f_thrust.y = clamp(f_thrust.y, -drone.mass * 20, drone.mass * 20)
-    '''
     f_net = f_thrust + f_gravity + f_drag
 
     #We will use acceleration to get velocity 
