@@ -42,36 +42,45 @@ target_yaw_rad = 0.0 #this is the default position of a drone
 
 #Environmentals
 wind_steady_velocity = Vec3(5, 0, 0) #5 m/s horizontal wind blowing from west to east across the map
-wind_gust_velocity = Vec3(0, 0, 0)
-gust = False
-cooldown_time = random.uniform(3.0, 10.0)
+
+is_gusting = False
+cooldown_timer = 5.0 #seconds before first gust 
 active_timer = 0.0 
-direction_gust = Vec3(0, 0, 0)
-Time_gust = 0
+gust_peak_speed = 0.0
+gust_duration = 1.0 #default value  
+gust_direction = Vec3(1, 0, 0)
+wind_gust_velocity = Vec3(0, 0, 0)
 
 def environmentals():
-    global wind_gust_velocity, gust, cooldown_time, active_timer, direction_gust, Time_gust
-     
+    global is_gusting, cooldown_timer, active_timer, gust_peak_speed, gust_direction, wind_gust_velocity, gust_duration
+    
     #The formula for gust is in the notes 
-    if not gust:
-        cooldown_time -= time.dt
+    if not is_gusting: #Calm phase: count down to the next gust 
+        cooldown_timer -= time.dt
         wind_gust_velocity = Vec3(0, 0, 0)
         
-        if cooldown_time <= 0:
-            gust = True 
+        if cooldown_timer <= 0:
+            is_gusting = True 
             active_timer = 0.0 
-            Velocity_gust = random.uniform(3.0, 8.0) #gust speed
-            Time_gust = random.uniform(1.0, 10.0) #gust duration
-            direction_gust = Vec3(2, 0, 0) #unit vector
-    else:
+            gust_peak_speed = random.uniform(3.0, 8.0) #gust speed
+            gust_duration = random.uniform(1.0, 10.0) #gust duration
+
+            angle = random.uniform(0, 2 * math.pi) #unit vector direction
+            gust_direction = Vec3(Vec3(math.cos(angle), 0, math.sin(angle)).normalized())
+
+    else: #Active phase: runs 1 - cosine curve 
         active_timer += time.dt
-        if active_timer >= Time_gust:
-            gust = False
+
+        if active_timer >= gust_duration: #Gust finished, reseting variables
+            is_gusting = False
             cooldown_timer = random.uniform(3.0, 10.0)
             wind_gust_velocity = Vec3(0, 0, 0)
-        else:
-            V_curent = (Velocity_gust/2) * (1 - math.cos(2.0*math.pi* (active_timer/Time_gust)))
-            wind_gust_velocity = V_curent * direction_gust
+        else: #calculating velocity 
+            progress = active_timer / gust_duration
+            V_curent = (gust_peak_speed/2.0) * (1 - math.cos(2.0 * math.pi * progress))
+            wind_gust_velocity = gust_direction * V_curent
+        print(wind_gust_velocity)
+    #Turbulance
 
 #Motor manager - ESC(Electronic Speed Controller)
 def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
@@ -189,6 +198,9 @@ def update():
     drone.rotation_x += Ang_v_DEG.x * time.dt   # Pitch
     drone.rotation_y += Ang_v_DEG.y * time.dt  # Yaw
     drone.rotation_z += Ang_v_DEG.z * time.dt  # Roll
+
+
+    environmentals()
 
     #Forces calculation
     f_gravity = Vec3(0, -drone.mass * 9.81, 0)
