@@ -275,3 +275,21 @@ steps:
 
 2. calculate k_torque_effective 
 = k_torque * (air_density/1.225) * angular_velocity^2 
+
+The last thing is the ground effect which just means that the lift is increaded when hovering near y < 1.0 m. as height will approach 0, lift will increase up to 15%. 
+
+environmental is done now I am going on the next part 
+
+## sensors and visuals 
+1. I need to add the fpv camera to the front nose of my drone and then capture the rendered viewport pixels and pass into opencv arrays (arrays that represent images etc)
+2. 3D navigation course 
+3. flight path logging 
+
+I am starting by doing the 3d models first. I have added the drone's 3d model but the rotors aren't separate characters so that is an issue. The landscape is okay for now. For the navigation course I have implemented a red cross and hui which helps navigate to it. 
+
+Now I am going to start work on the fpv camera and then capturing its images to turn into opencv array for my computer vision part in the future. 
+
+first person camera:
+This will show us the pov from the camera on the drone. I will create a dronecamera entity. Another thing I am adding is a picture in picture panel which will continously display the 3rd person view as well. 
+
+

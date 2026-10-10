@@ -19,12 +19,12 @@ air_density_base = 1.225 #kg/m3
 air_density = 1.225 #this is the dynamic air density but I am giving this the same default value but it will be calculated soon
 cross_sectional_area = 0.2 #1 is the cross sectional area by formula but the drone is mostly an open body 
 
-k_drag = 0.8 #drag coefficient. Random Value for now
+k_drag = 0.4 #drag coefficient. Random Value for now
 T = 0.0 #Thrust level
 L = 0.1 #m .Arms length.
 d = L/math.sqrt(2) #prependicular arm distance to the x and z axis
 k_thrust = 1 #thrust coefficient. Random value for now 
-k_torque = 0.02 #torque coefficent. Random value for now 
+k_torque = 0.2 #torque coefficent. Random value for now 
 k_motordrag = 0.1 #Motor drag coefficent. Random value for now 
 motor_responsetime = 0.02 #motor lag . Random value rightnow
 motor_speed_array = [0.0, 0.0, 0.0, 0.0] #rad/s for each motor. m1, m2, m3, m4
@@ -39,8 +39,8 @@ torque_applied = Vec3(0, 0, 0)
 
 RAD_TO_DEG = 180.0 / math.pi
 
-P = 8.0 #constant with which we pull towards target angle
-D = 1.2 #damping coefficient 
+P = 6.0 #constant with which we pull towards target angle
+D = 2.5 #damping coefficient 
 P_yaw = 6.0
 D_yaw = 1.0 
 max_tilt = math.radians(20.0) #max the drone can tilt to a side
@@ -159,7 +159,7 @@ def environmentals():
 
     else: #Active phase: runs 1 - cosine curve 
         active_timer += time.dt
-        print("gust on")
+        #print("gust on")
         if active_timer >= gust_duration: #Gust finished, reseting variables
             is_gusting = False
             cooldown_timer = random.uniform(8.0, 12.0)
@@ -189,6 +189,13 @@ def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
     k_thrust_effective = k_thrust * air_density_ratio
     k_torque_effective = k_torque * air_density_ratio
 
+    #Ground effect(increased thrust near the ground)
+    height_above_ground = max(0.0, drone.y - 0.5)
+    ground_effect_factor = 1.0
+    if height_above_ground < 1.0:
+        ground_effect_factor = 1.0 +(0.90 * (1.0 - height_above_ground))#the effect is upto 15% (0.15)
+    k_thrust_effective *= ground_effect_factor
+
     #Using the formula mentioned in notes to calculate each motors force
     Cq = k_torque_effective / k_thrust_effective
     force_motor_1 = T/4 + (torque_applied_x/(4*d)) - (torque_applied_z/(4*d)) + (torque_applied_y/(4*Cq))
@@ -212,6 +219,7 @@ def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
     motor_speed_array[1] += ((angular_v_motor_2 - motor_speed_array[1]) / motor_responsetime) * time.dt
     motor_speed_array[2] += ((angular_v_motor_3 - motor_speed_array[2]) / motor_responsetime) * time.dt
     motor_speed_array[3] += ((angular_v_motor_4 - motor_speed_array[3]) / motor_responsetime) * time.dt
+    #print(motor_speed_array)
 
     #Converting speeds into motion again but this time with the new speed values
     F1 = k_thrust_effective * (motor_speed_array[0]) ** 2
@@ -219,27 +227,80 @@ def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
     F3 = k_thrust_effective * (motor_speed_array[2]) ** 2
     F4 = k_thrust_effective * (motor_speed_array[3]) ** 2
     f_total = F1 + F2 + F3 + F4 
+
+    #Adding Motor desaturation (makes sure no motor exceeds max limit of 0 to 20 N )
+    forces = [F1, F2, F3, F4]
+    max_f = max(forces)
+    min_f = min(forces)
+
+    F1 = clamp(F1, 0, 20)
+    F2 = clamp(F2, 0, 20)
+    F3 = clamp(F3, 0, 20)
+    F4 = clamp(F4, 0, 20)
+
     torque_x = d * (F1 + F3 - F2 - F4) #real motors(m1, m3) push the tail up
     torque_z = d * (F3 + F4 - F1 - F2) #left motors(m3, m4) roll the drone right
     torque_y = k_torque_effective * ((motor_speed_array[0]**2) + (motor_speed_array[3]**2) - (motor_speed_array[1]**2) - (motor_speed_array[2]**2))
 
     return f_total, torque_x, torque_y, torque_z
 
-plane = Entity(model='plane', scale=(30, 1, 30), color=color.green)
+plane = Entity(model='plane', scale= (1000, 1, 1000), texture="grass_texture", collider='box')
 
-camera.position = (0, 5, -20)
-camera.rotation_x = 10
+sky = Sky()
 
-drone = Entity(model='cube', color=color.orange)
+#Shadows 
+sun = DirectionalLight()
+sun.look_at(Vec3(1, -1, -1))  
+ambient = AmbientLight(color=color.rgba(150, 150, 150, 255))
+ 
+drone = Entity()
 drone.mass = m 
-drone.position_y = 0.5 
+drone.position = (0, 2, 0)
 
-hud = Text(text="", position=(-0.85, 0.45))
+drone_visual = Entity(parent=drone, model="drone", color=color.white, scale=0.02, y=2)
+
+#First Person Camera
+camera.parent = drone
+camera.position = (0, 0.1, 0)
+camera.rotation = (0, 0, 0)
+camera.fov = 110
+
+#Third person camera (confusing code. I don't  really understand it)
+second_cam_entity = Entity()
+second_cam = base.cam.node().make_copy() 
+second_cam_np = second_cam_entity.attach_new_node(second_cam)
+
+PANEL_LEFT   = 0.73
+PANEL_RIGHT  = 0.97
+PANEL_BOTTOM = 0.68
+PANEL_TOP    = 0.93
+
+second_cam_panel = base.win.make_display_region(PANEL_LEFT, PANEL_RIGHT, PANEL_BOTTOM, PANEL_TOP)
+second_cam_panel.set_sort(10)
+second_cam_panel.set_camera(second_cam_np)
+
+screen_aspect = window.aspect_ratio
+
+ui_width = (PANEL_RIGHT - PANEL_LEFT) * screen_aspect
+ui_height = PANEL_TOP - PANEL_BOTTOM
+ui_x = ((PANEL_LEFT + PANEL_RIGHT) / 2 - 0.5) * screen_aspect
+ui_y = (PANEL_TOP + PANEL_BOTTOM) / 2 - 0.5
+
+panel_frame = Entity(parent=camera.ui, model='quad', color=color.clear, scale=(ui_width + 0.02, ui_height + 0.02), x=ui_x, y=ui_y, z=-1)
+panel_text = Text(text="3RD PERSON VIEW", parent=camera.ui, scale=1.1, color=color.black, x=ui_x, y=ui_y - (ui_height / 2) - 0.03, origin=(0,0))
+
+
+#Cross as a navigation goal 
+cross1 = Entity(position=Vec3(50, 0.5, 50))
+Entity(parent=cross1, model='cube', scale=(4, 0.2, 1), color=color.red) #Horizontal bar of the cross
+Entity(parent=cross1, model='cube', scale=(1, 0.2, 4), color=color.red) #Vertical bar of the cross
+
+hud = Text(text="", position=(-0.85, 0.45), color=color.dark_gray)
 
 def update():
     #To follow the drone
-    camera.position = drone.position + Vec3(0, 5, -15)
-    camera.look_at(drone)
+    second_cam_entity.position = drone.position + Vec3(0, 3, -8)
+    second_cam_entity.look_at(drone)
 
     global T, v, Ang_v_RAD, torque_applied, target_yaw_rad, motor_speed_array #Global variables are required to be declared inside the func
     #Here will be the physics implementation
@@ -320,7 +381,7 @@ def update():
     drone.position += v * time.dt #Eular Numerical part 
 
     #if it collides with the ground
-    if drone.y < 0.5:
+    if drone.y <= 0.5:
         drone.y = 0.5
         if v.y < 0: #check for if vertical component is pointing downwards
             v.y = 0 
@@ -328,13 +389,24 @@ def update():
         v.z *= 0.9 
         Ang_v_RAD *= 0.1 #This reduces the angular velocity by 10% every frame it is touching the ground
 
-    hud.text = f"""
-    Thrust: {T:.1f} N
-    Linear Vel: ({v.x:.1f}, {v.y:.1f}, {v.z:.1f}) m/s
-    Angular Vel: ({Ang_v_DEG.x:.0f}, {Ang_v_DEG.y:.0f}, {Ang_v_DEG.z:.0f}) deg/s
-    Position: ({drone.world_x:.0f}, {drone.world_y:.0f}, {drone.world_z:.0f})
-    Orientation: ({drone.rotation_x:.0f}, {drone.rotation_y:.0f}, {drone.rotation_z:.0f}) deg
-    """
+    if distance(drone, cross1) <= 2.0:
+        hud.text = f"""
+            Thrust: {T:.1f} N
+            Linear Vel: ({v.x:.1f}, {v.y:.1f}, {v.z:.1f}) m/s
+            Angular Vel: ({Ang_v_DEG.x:.0f}, {Ang_v_DEG.y:.0f}, {Ang_v_DEG.z:.0f}) deg/s
+            Position: ({drone.world_x:.0f}, {drone.world_y:.0f}, {drone.world_z:.0f})
+            Orientation: ({drone.rotation_x:.0f}, {drone.rotation_y:.0f}, {drone.rotation_z:.0f}) deg
+            Target Reached!!!
+            """
+    else:
+        hud.text = f"""
+        Thrust: {T:.1f} N
+        Linear Vel: ({v.x:.1f}, {v.y:.1f}, {v.z:.1f}) m/s
+        Angular Vel: ({Ang_v_DEG.x:.0f}, {Ang_v_DEG.y:.0f}, {Ang_v_DEG.z:.0f}) deg/s
+        Position: ({drone.world_x:.0f}, {drone.world_y:.0f}, {drone.world_z:.0f})
+        Orientation: ({drone.rotation_x:.0f}, {drone.rotation_y:.0f}, {drone.rotation_z:.0f}) deg
+        Distance to target: {distance(drone, cross1)}
+        """
 
 app.run()  
 
