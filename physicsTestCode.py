@@ -1,7 +1,10 @@
-#trying to test out physics stuff I js learned 
+#Main code is here for now
+
+import math 
+import random 
+
 from ursina import *
 app = Ursina()
-import math 
 
 #keeps the angles between -180 and 180
 def angleRange(angle):
@@ -12,8 +15,11 @@ m = 1 #kg
 g = 9.81 #m/s^2
 v = Vec3(0, 0, 0)
 Ang_v_RAD = Vec3(0, 0, 0) # rad/s . angular velocity 
+air_density_base = 1.225 #kg/m3
+air_density = 1.225 #this is the dynamic air density but I am giving this the same default value but it will be calculated soon
+cross_sectional_area = 0.2 #1 is the cross sectional area by formula but the drone is mostly an open body 
 
-k = 0.3 #drag coefficient. Random Value for now
+k_drag = 0.8 #drag coefficient. Random Value for now
 T = 0.0 #Thrust level
 L = 0.1 #m .Arms length.
 d = L/math.sqrt(2) #prependicular arm distance to the x and z axis
@@ -24,7 +30,7 @@ motor_responsetime = 0.02 #motor lag . Random value rightnow
 motor_speed_array = [0.0, 0.0, 0.0, 0.0] #rad/s for each motor. m1, m2, m3, m4
 
 torque = Vec3(0, 0, 0)
-k_drag = 0.3 #rotatinal drag coeefficent.
+k_drag_rotational = 0.3 #rotatinal drag coeefficent.
 I_x = 0.167 #Moment of intertia x
 I_y = 0.167 #Moment of intertia y
 I_z = 0.167 #Moment of intertia z
@@ -40,8 +46,9 @@ D_yaw = 1.0
 max_tilt = math.radians(20.0) #max the drone can tilt to a side
 target_yaw_rad = 0.0 #this is the default position of a drone 
 
+
 #Environmentals
-wind_steady_velocity = Vec3(5, 0, 0) #5 m/s horizontal wind blowing from west to east across the map
+wind_steady_velocity = Vec3(1.5, 0, 0) #1.5 m/s horizontal wind blowing from west to east across the map
 
 is_gusting = False
 cooldown_timer = 5.0 #seconds before first gust 
@@ -51,8 +58,90 @@ gust_duration = 1.0 #default value
 gust_direction = Vec3(1, 0, 0)
 wind_gust_velocity = Vec3(0, 0, 0)
 
+#u is x axis, v is y axis, w is z axis
+
+wind_turbulence_velocity = Vec3(0, 0, 0)
+u_g = 0.0 #1st order state for u (front back)
+v_g1 = 0.0 #2nd order state for v (left right)
+v_g2 = 0.0 #2nd order state for v (left right)
+w_g1 = 0.0 #2nd order states for w (up down)
+w_g2 = 0.0 #2nd order states for w (up down)
+
+wind_total_velocity = Vec3(0, 0, 0)
+
+#This will return 3D turbulence wind vector (u_g, v_g, w_g)
+def dryden_model(v_relative_mag, altitude, severity):
+    global u_g, v_g1, v_g2, w_g1, w_g2
+    '''
+    v_relative_mag = scalar speed of the drone relative to air mass
+    altitude = drone height above ground in meters
+    severity = turbulence intensity scale (0.5 = light, 1.5 = moderate, 3.0 severe)
+    '''
+    
+    dt = time.dt 
+
+    #Prevents division by 0 
+    V = max(v_relative_mag, 0.1) #V is velocity 
+    h = max(altitude, 1.0) #h is height
+
+    #setting up Spatial length scales
+    L_w = h # y axis (vertical) scales directly with the height above the ground
+    L_u = h / (0.177 + 0.000823 * h) ** 1.2 #x axis (horizontal) expand near the surface so this is the formula
+    L_v = h / (0.177 + 0.000823 * h) ** 1.2 #z axis (horizontal) expand near the surface so this is the formula
+
+    #calculating time constants 
+    timeConstant_u = L_u / V
+    timeConstant_v = L_v / V
+    timeConstant_w = L_w / V 
+
+    #Turbulence intensities
+    sigma_w = 0.1 * severity * V
+    sigma_u = sigma_w / (0.177 + 0.000823 * h) ** 0.4
+    sigma_v = sigma_u
+
+    #Gaussian Random Variables
+    random_variable_u = random.gauss(0.0, 1.0)
+    random_variable_v = random.gauss(0.0, 1.0)
+    random_variable_w = random.gauss(0.0, 1.0)
+
+    #1st order filter for u (x axis) (formulas in notes)
+    alpha_u = math.exp(-dt / timeConstant_u)
+    beta_u = sigma_u * math.sqrt(max(0.0, 1.0 - alpha_u**2))
+
+    u_g = (alpha_u * u_g) + (beta_u * random_variable_u)
+
+    #2nd order filter for v (y axis)
+    alpha_v = math.exp(-dt / timeConstant_v)
+    beta_v = sigma_v * math.sqrt(max(0.0, 1.0 - alpha_v**2))
+
+    v_g1 = (alpha_v * v_g1) + (beta_v * random_variable_v)
+    v_g2 = (alpha_v * v_g2) + (dt / timeConstant_v) * v_g1
+
+    v_g = v_g1 + math.sqrt(3.0) * (v_g1 - v_g2)
+
+    #2nd order filter for for w (z axis)
+    alpha_w = math.exp(-dt / timeConstant_w)
+    beta_w = sigma_w * math.sqrt(max(0.0, 1.0 - alpha_w**2))
+
+    w_g1 = (alpha_w * w_g1) + (beta_w * random_variable_w)
+    w_g2 = (alpha_w * w_g2) + (dt / timeConstant_w) * w_g1
+
+    w_g = w_g1 + math.sqrt(3.0) * (w_g1 - w_g2)
+
+    wind_turbulence_velocity = Vec3(u_g, v_g, w_g)
+
+    return wind_turbulence_velocity
+
 def environmentals():
+    
+    #Gust: 1 - cos wave
+
     global is_gusting, cooldown_timer, active_timer, gust_peak_speed, gust_direction, wind_gust_velocity, gust_duration
+    global wind_turbulence_velocity, wind_total_velocity
+    global air_density
+
+    ground_factor = clamp(drone.y / 1.0, 0.0, 1.0) #This keep the wind velocity lower around the ground
+    wind_total_velocity = (wind_steady_velocity + wind_gust_velocity + wind_turbulence_velocity) * ground_factor
     
     #The formula for gust is in the notes 
     if not is_gusting: #Calm phase: count down to the next gust 
@@ -62,7 +151,7 @@ def environmentals():
         if cooldown_timer <= 0:
             is_gusting = True 
             active_timer = 0.0 
-            gust_peak_speed = random.uniform(3.0, 8.0) #gust speed
+            gust_peak_speed = random.uniform(1.0, 4.0) #gust speed
             gust_duration = random.uniform(1.0, 10.0) #gust duration
 
             angle = random.uniform(0, 2 * math.pi) #unit vector direction
@@ -70,23 +159,38 @@ def environmentals():
 
     else: #Active phase: runs 1 - cosine curve 
         active_timer += time.dt
-
+        print("gust on")
         if active_timer >= gust_duration: #Gust finished, reseting variables
             is_gusting = False
-            cooldown_timer = random.uniform(3.0, 10.0)
+            cooldown_timer = random.uniform(8.0, 12.0)
             wind_gust_velocity = Vec3(0, 0, 0)
         else: #calculating velocity 
             progress = active_timer / gust_duration
             V_curent = (gust_peak_speed/2.0) * (1 - math.cos(2.0 * math.pi * progress))
             wind_gust_velocity = gust_direction * V_curent
-        print(wind_gust_velocity)
-    #Turbulance
+
+    #Turbulance: 
+
+    v_relative = v - wind_total_velocity     #relative velocity vector
+    airspeed = v_relative.length()
+    altitude = drone.y
+    severity = 0.5 #moderate turbulence 
+
+    wind_turbulence_velocity = dryden_model(airspeed, altitude, severity)
+
+    #air density scaling (formula in notes)
+    air_density = air_density_base * max(0.1, 1.0 - (drone.y * 0.0001))
 
 #Motor manager - ESC(Electronic Speed Controller)
 def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
-    global motor_speed_array, Ang_v_RAD
+    global motor_speed_array, Ang_v_RAD, air_density
+
+    air_density_ratio = air_density / air_density_base
+    k_thrust_effective = k_thrust * air_density_ratio
+    k_torque_effective = k_torque * air_density_ratio
+
     #Using the formula mentioned in notes to calculate each motors force
-    Cq = k_torque / k_thrust
+    Cq = k_torque_effective / k_thrust_effective
     force_motor_1 = T/4 + (torque_applied_x/(4*d)) - (torque_applied_z/(4*d)) + (torque_applied_y/(4*Cq))
     force_motor_2 = T/4 - (torque_applied_x/(4*d)) - (torque_applied_z/(4*d)) - (torque_applied_y/(4*Cq))
     force_motor_3 = T/4 + (torque_applied_x/(4*d)) + (torque_applied_z/(4*d)) - (torque_applied_y/(4*Cq))
@@ -98,10 +202,10 @@ def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
     force_motor_4 = clamp(force_motor_4, 0, 20)
 
     #Converts force in newtons to angular velocity in rad/s
-    angular_v_motor_1 = math.sqrt(force_motor_1/k_thrust)
-    angular_v_motor_2 = math.sqrt(force_motor_2/k_thrust)
-    angular_v_motor_3 = math.sqrt(force_motor_3/k_thrust)
-    angular_v_motor_4 = math.sqrt(force_motor_4/k_thrust)
+    angular_v_motor_1 = math.sqrt(force_motor_1/k_thrust_effective)
+    angular_v_motor_2 = math.sqrt(force_motor_2/k_thrust_effective)
+    angular_v_motor_3 = math.sqrt(force_motor_3/k_thrust_effective)
+    angular_v_motor_4 = math.sqrt(force_motor_4/k_thrust_effective)
 
     #Calculate the lag in each angular velocity and add the speed to the speed arrray
     motor_speed_array[0] += ((angular_v_motor_1 - motor_speed_array[0]) / motor_responsetime) * time.dt
@@ -110,14 +214,14 @@ def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
     motor_speed_array[3] += ((angular_v_motor_4 - motor_speed_array[3]) / motor_responsetime) * time.dt
 
     #Converting speeds into motion again but this time with the new speed values
-    F1 = k_thrust * (motor_speed_array[0]) ** 2
-    F2 = k_thrust * (motor_speed_array[1]) ** 2
-    F3 = k_thrust * (motor_speed_array[2]) ** 2
-    F4 = k_thrust * (motor_speed_array[3]) ** 2
+    F1 = k_thrust_effective * (motor_speed_array[0]) ** 2
+    F2 = k_thrust_effective * (motor_speed_array[1]) ** 2
+    F3 = k_thrust_effective * (motor_speed_array[2]) ** 2
+    F4 = k_thrust_effective * (motor_speed_array[3]) ** 2
     f_total = F1 + F2 + F3 + F4 
     torque_x = d * (F1 + F3 - F2 - F4) #real motors(m1, m3) push the tail up
     torque_z = d * (F3 + F4 - F1 - F2) #left motors(m3, m4) roll the drone right
-    torque_y = k_torque * ((motor_speed_array[0]**2) + (motor_speed_array[3]**2) - (motor_speed_array[1]**2) - (motor_speed_array[2]**2))
+    torque_y = k_torque_effective * ((motor_speed_array[0]**2) + (motor_speed_array[3]**2) - (motor_speed_array[1]**2) - (motor_speed_array[2]**2))
 
     return f_total, torque_x, torque_y, torque_z
 
@@ -185,7 +289,7 @@ def update():
 
     actual_f_total, torque_applied.x, torque_applied.y, torque_applied.z = ESC(T, torque_applied.x, torque_applied.y, torque_applied.z)
 
-    torque_drag = -Ang_v_RAD * k_drag #Ang_v_RAD is the max angular rotation. It means the top rotation speed will be about 170 deg / s 
+    torque_drag = -Ang_v_RAD * k_drag_rotational #Ang_v_RAD is the max angular rotation. It means the top rotation speed will be about 170 deg / s 
 
     torque_net = torque_applied + torque_drag
 
@@ -199,13 +303,15 @@ def update():
     drone.rotation_y += Ang_v_DEG.y * time.dt  # Yaw
     drone.rotation_z += Ang_v_DEG.z * time.dt  # Roll
 
-
     environmentals()
+
+    v_relative = v - wind_total_velocity
+    v_relative_scalar = v_relative.length()
 
     #Forces calculation
     f_gravity = Vec3(0, -drone.mass * 9.81, 0)
     f_thrust = drone.up * actual_f_total #thrust and drag apply in all directions that's why
-    f_drag = -v * k         #they will be added universally while gravity is only for down
+    f_drag = -0.5 * air_density * k_drag * cross_sectional_area * v_relative * v_relative_scalar 
     f_net = f_thrust + f_gravity + f_drag
 
     #We will use acceleration to get velocity 

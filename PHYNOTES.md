@@ -194,7 +194,7 @@ The formual is: gust at time t = (max gust intensity/2)(1 - cos(2pi*t/T))
 t is time elapsed since gust started
 T is total gust duration
 
-turbulence velocity will be chaotic high freq changes. Will use standard aerospace models like the dryden turbulene model (don't know what that is yet)
+turbulence velocity will be chaotic high freq changes. Will use standard aerospace models like the dryden turbulence model (don't know what that is yet)
 
 Last thing: Air density will scale from both thrust and torque drag.
 thrust/(thrust cofficient * anguar velocity^2) = p 
@@ -204,3 +204,74 @@ In order to implement I will:
 1. Calculate wind velocity first 
 2. Calculate relative velocity
 3. change current body drag f_drag = -v * k into body drag eqn
+
+I am doing the wind part first. 
+1. I have made a constant wind velocity 
+2. I have made a gust velocity function which just randomizes a 1 - cos wave for a duration 
+3. Now I am making the turbulence velocity part of the function
+
+Turbulence velocity func: (reading articles for this. Probably gonna make the one gemini recommended)
+dryden turbulence model: This is a turbulence model made by the US military. It has a function as well "dryden_wind_velocities(height, airspeed)". It takes height and airspeed of the drone as inputs. There are 3 formulas as well: along wind, cross wind, vertical wind. I would rather make my own function than use the prebuilt one. The whole thing works by passing continuous white noise through a spatial filter using gust length sclaes and turblence intensicties. We are using this instead of random numbers cuz random numbers have no corollation inbetween. 
+parameters:
+1. Turbulence intensity(sigma_u, sigma_v, sigma_w): this is the velocity fluctuations along the body axes so this decides how hard the turbulence its. 
+2. Spatial length scales(L_u, L_v, L_w): This controls how long an eddy lasts as it passes over the drone. Eddy is the swirling of the air and the current it creates.
+Steps:
+1. Calculate time constant
+2. Generate independent Gaussian random variables (for each axis)  
+4. recalculate time constants for the the frame 
+5. Advance discrete state variables (use 1st order and 2nd order equations):
+    calcuate frame constant 
+    update its state 
+4. get the output 
+
+sigma = turbulence intensity, L is spatil length scales, V is the current drone airspeed 
+dryen transfer equations:
+1. 1st order filter (for y axis cuz its lower): the equation looks disgusting when I write it like this but its straightforward i think.
+
+H_u(s) = sigma_u*sqroot((2*L_u)/(pi*V))*(1/(1 + (L_u/V)*s))
+
+2. 2nd order filters (for x and z axis):
+
+h_v(s) = sigma_v*sqroot(L_U/(pi*V))* (1 + cbroot(3)*(L_u/V)*s)/square(1 + (L_u/V)s)
+
+3. Time constant: 
+
+T = L/V_relative (for each axis)
+
+4. Generating Gaussian random variables: Gaussian just means to generate variables with a mean of 0 and a standard deviation of 1. I will generate them using random library. 
+eta_u = random.gauss(mean=0.0, std_dev=1.0)
+eta_v = random.gauss(mean=0.0, std_dev=1.0)
+eta_w = random.gauss(mean=0.0, std_dev=1.0)
+
+5. frame constant:
+a_u = e^(-deltat/T_u)
+B_u = sigma_u * sqroot(1 - a_u^2)
+
+6. updating states:
+u_g[k] = (a_u * u_g*(k-1)) + (b_u * n_u)
+
+Overall this whole thing is really confusing so I am gonna adapt geminis code with my own rough code. 
+
+I am done with the turbulence function and it works. Now next part is coding the quadratic relative body drag. 
+I will use this new equation for body drag:
+Body drag eqn: -0.5*p * Cd * A * |relative v| * relative v
+p is air density, 1.225 kg/m3
+Cd is drag coefficent 
+A is cross sectional area
+
+I am done with the new relative body drag. Next thing to implement is Air density scaling on motor thrust and torque drag. 
+
+Air density scaling: Right now my electronic speed controller calculates motor force using static coefficient with these formulas: 
+1. force = k_thrust * angular_velocity^2 
+2. torque drag = k_torque * angular_velocity^2
+but these are static. In real life, if we fly higher up the motor loses efficiency cuz the air is thinner. 
+
+Before these I will need to calculate air_density constantly using the formula: 
+air_density_base = 1.225
+air_density = air_density_base * max(0.1, 1.0 - (drone.y * 0.0001))
+steps:
+1. calculate actual thrust 
+= k_thrust * (air_density/1.225) *  angular_velocity^2 
+
+2. calculate k_torque_effective 
+= k_torque * (air_density/1.225) * angular_velocity^2 
