@@ -469,3 +469,22 @@ Next thing I am adding is audio.
 
 I am done with the sound and the whole drone simulator part but I am gonna spend time adding features. 
 
+# Features:
+1. Trees around the map
+2. Battery drain and voltage sag 
+3. Wind fighter: Pressing a button fights the wind gust and hold the drone at current position 
+4. toggle third person on off -DONE (V is the key now)
+
+Auto hold: 
+I am making auto hold now. 
+steps:
+1. I will get the base counter force which is f=ma
+2. apply PD controller which is a standard formula used for this task. (alt_error * P_gain) - (v.y * D_gain)
+3. Combine both into the final thrust
+
+Wind fighter:
+steps:
+1. First we get the direction of the drone nose but I already have it cuz of using it in other calculations
+2. Then we apply the 2 formulas for x and z axis that will use the wind velocity vector to see what is the effect on the drone body itself.
+3. Then we will multiply the change into the target angles of pitch and roll
+with a slight increase.
