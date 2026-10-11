@@ -292,4 +292,26 @@ Now I am going to start work on the fpv camera and then capturing its images to 
 first person camera:
 This will show us the pov from the camera on the drone. I will create a dronecamera entity. Another thing I am adding is a picture in picture panel which will continously display the 3rd person view as well. 
 
+3rd person panel: The code is a bit confusing but it works by creating a second entity and giving it the lens properties 
 
+Now the next thing is streaming the first person pov to an array for processing:
+1. Capture the frame buffer
+2. extract pixels to a numpy array 
+3. Reshape the flat byte array into a 3D matrix 
+4. Game engines use RGB but OpenCV processes images in BGR (Blue Green Red) format so color space conversion
+5. Implement a frame skip counter cuz if we will do with each frame it will cause performance issues. 
+
+Capture the frame buffer: I am aiming to get 20 frames per second as the drone will do fast action stuff. I will get the last capture time and if more time has passed than our frame interval then we will capture. For the capturing part, I am making a separate func. 
+
+I have tried a few things but there are crashes and errors so I think I will implement this last
+
+# Anti crash mechanism
+if the drone's y velocity (v.y) is lower than -20 and its going into the ground then the motors will apply thrust to bring velocity to at least -2 to prevent crash. 
+
+# Audio 
+Next thing I am adding is audio. 
+1. Dynamic motor sound: I will adjust the audio based on the avg of the motor_speed_array.
+2. Wind Whistle audio: make changes to the audio based on the total wind velocity's length.
+3. Beeping when auto crash is applied
+
+I will start by getting both effects.

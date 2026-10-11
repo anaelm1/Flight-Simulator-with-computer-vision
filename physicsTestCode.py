@@ -2,6 +2,7 @@
 
 import math 
 import random 
+import numpy as np
 
 from ursina import *
 app = Ursina()
@@ -19,7 +20,7 @@ air_density_base = 1.225 #kg/m3
 air_density = 1.225 #this is the dynamic air density but I am giving this the same default value but it will be calculated soon
 cross_sectional_area = 0.2 #1 is the cross sectional area by formula but the drone is mostly an open body 
 
-k_drag = 0.4 #drag coefficient. Random Value for now
+k_drag = 0.12 #drag coefficient. Random Value for now
 T = 0.0 #Thrust level
 L = 0.1 #m .Arms length.
 d = L/math.sqrt(2) #prependicular arm distance to the x and z axis
@@ -43,9 +44,8 @@ P = 6.0 #constant with which we pull towards target angle
 D = 2.5 #damping coefficient 
 P_yaw = 6.0
 D_yaw = 1.0 
-max_tilt = math.radians(20.0) #max the drone can tilt to a side
+max_tilt = math.radians(30.0) #max the drone can tilt to a side
 target_yaw_rad = 0.0 #this is the default position of a drone 
-
 
 #Environmentals
 wind_steady_velocity = Vec3(1.5, 0, 0) #1.5 m/s horizontal wind blowing from west to east across the map
@@ -69,6 +69,10 @@ w_g2 = 0.0 #2nd order states for w (up down)
 
 wind_total_velocity = Vec3(0, 0, 0)
 
+anti_crash = False #anti crash mechanism status
+has_taken_off = False
+
+
 #This will return 3D turbulence wind vector (u_g, v_g, w_g)
 def dryden_model(v_relative_mag, altitude, severity):
     global u_g, v_g1, v_g2, w_g1, w_g2
@@ -81,7 +85,7 @@ def dryden_model(v_relative_mag, altitude, severity):
     dt = time.dt 
 
     #Prevents division by 0 
-    V = max(v_relative_mag, 0.1) #V is velocity 
+    V = max(v_relative_mag, 0.2) #V is velocity 
     h = max(altitude, 1.0) #h is height
 
     #setting up Spatial length scales
@@ -93,6 +97,8 @@ def dryden_model(v_relative_mag, altitude, severity):
     timeConstant_u = L_u / V
     timeConstant_v = L_v / V
     timeConstant_w = L_w / V 
+
+    timeConstant_u = max(timeConstant_u, 0.01) #prevents division by 0
 
     #Turbulence intensities
     sigma_w = 0.1 * severity * V
@@ -151,8 +157,8 @@ def environmentals():
         if cooldown_timer <= 0:
             is_gusting = True 
             active_timer = 0.0 
-            gust_peak_speed = random.uniform(1.0, 4.0) #gust speed
-            gust_duration = random.uniform(1.0, 10.0) #gust duration
+            gust_peak_speed = random.uniform(2.0, 6.0) #gust speed
+            gust_duration = random.uniform(4.0, 10.0) #gust duration
 
             angle = random.uniform(0, 2 * math.pi) #unit vector direction
             gust_direction = Vec3(Vec3(math.cos(angle), 0, math.sin(angle)).normalized())
@@ -174,7 +180,7 @@ def environmentals():
     v_relative = v - wind_total_velocity     #relative velocity vector
     airspeed = v_relative.length()
     altitude = drone.y
-    severity = 0.5 #moderate turbulence 
+    severity = 1 #moderate turbulence 
 
     wind_turbulence_velocity = dryden_model(airspeed, altitude, severity)
 
@@ -183,7 +189,7 @@ def environmentals():
 
 #Motor manager - ESC(Electronic Speed Controller)
 def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
-    global motor_speed_array, Ang_v_RAD, air_density
+    global motor_speed_array, Ang_v_RAD, air_density, anti_crash
 
     air_density_ratio = air_density / air_density_base
     k_thrust_effective = k_thrust * air_density_ratio
@@ -226,6 +232,30 @@ def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
     F2 = k_thrust_effective * (motor_speed_array[1]) ** 2
     F3 = k_thrust_effective * (motor_speed_array[2]) ** 2
     F4 = k_thrust_effective * (motor_speed_array[3]) ** 2
+
+    #Anti Crash Mechanism: This will apply thrust if the drone is descending at a high rate/stalling
+    if v.y < -3.0 and has_taken_off:
+        if drone.y < 10.0: 
+            F1 += 15
+            F2 += 15
+            F3 += 15
+            F4 += 15
+            anti_crash = True
+            print(v.y)
+        else:
+            anti_crash = False
+
+    if v.y > -2.0: 
+        anti_crash = False
+
+    idle_force = 0.15 #This is for realistic free fall
+
+    if anti_crash:
+        F1 = clamp(F1, idle_force, 25)
+        F2 = clamp(F2, idle_force, 25)
+        F3 = clamp(F3, idle_force, 25)
+        F4 = clamp(F4, idle_force, 25)
+        
     f_total = F1 + F2 + F3 + F4 
 
     #Adding Motor desaturation (makes sure no motor exceeds max limit of 0 to 20 N )
@@ -233,10 +263,10 @@ def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
     max_f = max(forces)
     min_f = min(forces)
 
-    F1 = clamp(F1, 0, 20)
-    F2 = clamp(F2, 0, 20)
-    F3 = clamp(F3, 0, 20)
-    F4 = clamp(F4, 0, 20)
+    F1 = clamp(F1, idle_force, 20)
+    F2 = clamp(F2, idle_force, 20)
+    F3 = clamp(F3, idle_force, 20)
+    F4 = clamp(F4, idle_force, 20)
 
     torque_x = d * (F1 + F3 - F2 - F4) #real motors(m1, m3) push the tail up
     torque_z = d * (F3 + F4 - F1 - F2) #left motors(m3, m4) roll the drone right
@@ -265,11 +295,12 @@ camera.position = (0, 0.1, 0)
 camera.rotation = (0, 0, 0)
 camera.fov = 110
 
-#Third person camera (confusing code. I don't  really understand it)
-second_cam_entity = Entity()
-second_cam = base.cam.node().make_copy() 
-second_cam_np = second_cam_entity.attach_new_node(second_cam)
+#Third person camera 
+second_cam_entity = Entity() #Making the camera 
+second_cam = base.cam.node().make_copy() #copying the lens and stuff of the main camera
+second_cam_np = second_cam_entity.attach_new_node(second_cam) #The window itself
 
+#Panel dimensions math and stuff. Done by Gemini
 PANEL_LEFT   = 0.73
 PANEL_RIGHT  = 0.97
 PANEL_BOTTOM = 0.68
@@ -286,45 +317,42 @@ ui_height = PANEL_TOP - PANEL_BOTTOM
 ui_x = ((PANEL_LEFT + PANEL_RIGHT) / 2 - 0.5) * screen_aspect
 ui_y = (PANEL_TOP + PANEL_BOTTOM) / 2 - 0.5
 
-panel_frame = Entity(parent=camera.ui, model='quad', color=color.clear, scale=(ui_width + 0.02, ui_height + 0.02), x=ui_x, y=ui_y, z=-1)
+panel_frame = Entity(parent=camera.ui, model='quad', color=color.black66, scale=(ui_width + 0.02, ui_height + 0.02), x=ui_x, y=ui_y, z=-1)
 panel_text = Text(text="3RD PERSON VIEW", parent=camera.ui, scale=1.1, color=color.black, x=ui_x, y=ui_y - (ui_height / 2) - 0.03, origin=(0,0))
-
 
 #Cross as a navigation goal 
 cross1 = Entity(position=Vec3(50, 0.5, 50))
-Entity(parent=cross1, model='cube', scale=(4, 0.2, 1), color=color.red) #Horizontal bar of the cross
-Entity(parent=cross1, model='cube', scale=(1, 0.2, 4), color=color.red) #Vertical bar of the cross
+horizontal_bar = Entity(parent=cross1, model='cube', scale=(4, 0.2, 1), color=color.red) #Horizontal bar of the cross
+vertical_bar = Entity(parent=cross1, model='cube', scale=(1, 0.2, 4), color=color.red) #Vertical bar of the cross
 
-hud = Text(text="", position=(-0.85, 0.45), color=color.dark_gray)
+#hud panel with physical values
+hud_panel = Entity(model='quad', parent=camera.ui, position=(-0.85, 0.45), color=color.black66, scale=(1, 0.4))
+hud = Text(parent=hud_panel, text="", position=(-0.09, 0), color=color.white, scale=(1.5, 1.6))
+
+#Audios
+rotor_audio = Audio('drone_rotor_audio.wav', loop=True, autoplay=True, volume=0.0)
+wind_audio = Audio('wind_audio.wav', loop=True, autoplay=True, volume=0.0)
+anti_crash_audio = Audio('anti_crash_audio.wav', loop=True, autoplay=True, volume=0.0)
 
 def update():
     #To follow the drone
     second_cam_entity.position = drone.position + Vec3(0, 3, -8)
     second_cam_entity.look_at(drone)
 
-    global T, v, Ang_v_RAD, torque_applied, target_yaw_rad, motor_speed_array #Global variables are required to be declared inside the func
+    global T, v, Ang_v_RAD, torque_applied, target_yaw_rad, motor_speed_array, last_capture_time, anti_crash, has_taken_off #Global variables are required to be declared inside the func
     #Here will be the physics implementation
 
-    #This is the reset key 
-    if held_keys['r']:  
-        drone.position = Vec3(0, 0.5, 0)
-        drone.rotation = Vec3(0, 0, 0)
-        v = Vec3(0, 0, 0)
-        Ang_v_RAD = Vec3(0, 0, 0)
-        T = 0.0
-        motor_speed_array = [0.0, 0.0, 0.0, 0.0]
-
-    thrust_rate = 10
+    thrust_rate = 15
     torque_strength = 0.5 
 
     #Thrust control 
     T += held_keys["space"] * time.dt * thrust_rate
     T -= held_keys["shift"] * time.dt * thrust_rate
-    T = clamp(T, 0, 20)
+    T = clamp(T, 0, 35)
 
     #Yaw stabalization
     current_angle_yaw = math.radians(angleRange(drone.rotation_y))
-    yaw_input = held_keys['a'] - held_keys['d']
+    yaw_input =  held_keys['d'] - held_keys['a']
 
     if yaw_input != 0:
         torque_applied.y = yaw_input * torque_strength
@@ -349,6 +377,17 @@ def update():
     torque_applied.z = (error_roll * P) - (Ang_v_RAD.z * D)
 
     actual_f_total, torque_applied.x, torque_applied.y, torque_applied.z = ESC(T, torque_applied.x, torque_applied.y, torque_applied.z)
+
+    #This is the reset key 
+    if held_keys['r']:  
+        drone.position = Vec3(0, 0.5, 0)
+        drone.rotation = Vec3(0, 0, 0)
+        v = Vec3(0, 0, 0)
+        Ang_v_RAD = Vec3(0, 0, 0)
+        T = 0.0
+        motor_speed_array = [0.0, 0.0, 0.0, 0.0]
+        torque_applied = Vec3(0, 0, 0)
+        actual_f_total = 0 
 
     torque_drag = -Ang_v_RAD * k_drag_rotational #Ang_v_RAD is the max angular rotation. It means the top rotation speed will be about 170 deg / s 
 
@@ -389,24 +428,42 @@ def update():
         v.z *= 0.9 
         Ang_v_RAD *= 0.1 #This reduces the angular velocity by 10% every frame it is touching the ground
 
+    if drone.y > 1.0:
+        has_taken_off = True
+     
+    #Cross navigation system
     if distance(drone, cross1) <= 2.0:
+        vertical_bar.color = color.green
+        horizontal_bar.color = color.green
         hud.text = f"""
             Thrust: {T:.1f} N
             Linear Vel: ({v.x:.1f}, {v.y:.1f}, {v.z:.1f}) m/s
             Angular Vel: ({Ang_v_DEG.x:.0f}, {Ang_v_DEG.y:.0f}, {Ang_v_DEG.z:.0f}) deg/s
             Position: ({drone.world_x:.0f}, {drone.world_y:.0f}, {drone.world_z:.0f})
             Orientation: ({drone.rotation_x:.0f}, {drone.rotation_y:.0f}, {drone.rotation_z:.0f}) deg
+            {"ANTI CRASH ENGAGED!" if anti_crash else "Anti Crash System: False"}
             Target Reached!!!
             """
     else:
         hud.text = f"""
         Thrust: {T:.1f} N
-        Linear Vel: ({v.x:.1f}, {v.y:.1f}, {v.z:.1f}) m/s
+        Linear Vel: ({v.x:.0f}, {v.y:.0f}, {v.z:.0f}) m/s
         Angular Vel: ({Ang_v_DEG.x:.0f}, {Ang_v_DEG.y:.0f}, {Ang_v_DEG.z:.0f}) deg/s
         Position: ({drone.world_x:.0f}, {drone.world_y:.0f}, {drone.world_z:.0f})
         Orientation: ({drone.rotation_x:.0f}, {drone.rotation_y:.0f}, {drone.rotation_z:.0f}) deg
-        Distance to target: {distance(drone, cross1)}
+        {"ANTI CRASH ENGAGED!" if anti_crash else "Anti Crash System: False"}
+        Distance to target: {distance(drone, cross1):.0f}
         """
+
+        update_audio()
+
+#loop to manage rotor, wind, anti crash audios
+def update_audio():
+    #Dynamic rotor audio
+    avg_rpm = sum(motor_speed_array) / 4.0
+    speed_ratio = clamp(avg_rpm / 40.0, 0.0, 1.0) #getting a ratio of the rpm
+    rotor_audio.volume = clamp(speed_ratio * 200,0.0, 100.0) #max volume is 80% (0.8)
+    #rotor_audio.pitch = 0.5 + (speed_ratio * 1.0) #pitch is 0.5 to 1.5. pitch increases as the rotors spin faster
 
 app.run()  
 
