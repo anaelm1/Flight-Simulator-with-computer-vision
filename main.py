@@ -4,12 +4,13 @@
 v = 3rd person window toggle
 r = reset the drone
 h = auto hover
-f = wind gust fighter
 '''
 
 import math 
 import random 
 import numpy as np
+import csv
+import datetime
 
 from ursina import *
 app = Ursina()
@@ -79,6 +80,7 @@ wind_total_velocity = Vec3(0, 0, 0)
 #anti crash mechanism status
 anti_crash = False 
 has_taken_off = False
+flight_timer = 0.0
 
 #Auto Hover
 auto_hover = False
@@ -86,6 +88,14 @@ auto_hover_altitude = 0
 
 #wind fighter
 wind_fighter = False
+anchor_position = Vec3(0, 0, 0)
+
+#CSV flight logging
+log_filename = f"flight_log_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+csv_file = open(log_filename, mode='w', newline='')
+csv_writer = csv.writer(csv_file)
+csv_writer.writerow(['Time', 'PositionX', 'PositionY', 'PositionZ', 'VelocityX', 'VelocityY', 'VelocityZ', 'Thrust', 'AutoHover', 'WindFighter', 'AntiCrash'])
+log_timer = 0.0
 
 
 #This will return 3D turbulence wind vector (u_g, v_g, w_g)
@@ -99,14 +109,18 @@ def dryden_model(v_relative_mag, altitude, severity):
     
     dt = time.dt 
 
+    #Prevents division by 0
+    dt = max(time.dt, 0.001)
+
     #Prevents division by 0 
-    V = max(v_relative_mag, 0.2) #V is velocity 
-    h = max(altitude, 1.0) #h is height
+    V = max(v_relative_mag, 0.5) #V is velocity 
+    h = max(altitude, 0.5) #h is height
 
     #setting up Spatial length scales
     L_w = h # y axis (vertical) scales directly with the height above the ground
-    L_u = h / (0.177 + 0.000823 * h) ** 1.2 #x axis (horizontal) expand near the surface so this is the formula
-    L_v = h / (0.177 + 0.000823 * h) ** 1.2 #z axis (horizontal) expand near the surface so this is the formula
+    denominator_scale = max(0.1, (0.177 + 0.000823 * h) ** 1.2)
+    L_u = h / denominator_scale #x axis (horizontal) expand near the surface so this is the formula
+    L_v = h / denominator_scale #z axis (horizontal) expand near the surface so this is the formula
 
     #calculating time constants 
     timeConstant_u = L_u / V
@@ -114,9 +128,9 @@ def dryden_model(v_relative_mag, altitude, severity):
     timeConstant_w = L_w / V 
 
     #prevents division by 0
-    timeConstant_u = max(timeConstant_u, 0.1)
-    timeConstant_v = max(timeConstant_v, 0.1)
-    timeConstant_w = max(timeConstant_w, 0.1)
+    timeConstant_u = max(timeConstant_u, 0.05)
+    timeConstant_v = max(timeConstant_v, 0.05)
+    timeConstant_w = max(timeConstant_w, 0.05)
 
     #Turbulence intensities
     sigma_w = 0.1 * severity * V
@@ -208,6 +222,7 @@ def environmentals():
 #Motor manager - ESC(Electronic Speed Controller)
 def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
     global motor_speed_array, Ang_v_RAD, air_density, anti_crash
+    global flight_timer
 
     air_density_ratio = air_density / air_density_base
     k_thrust_effective = k_thrust * air_density_ratio
@@ -254,12 +269,12 @@ def ESC(T, torque_applied_x, torque_applied_y, torque_applied_z):
     idle_force = 0.15 #This is for realistic free fall
 
     #Anti Crash Mechanism: This will apply thrust if the drone is descending at a high rate/stalling
-    #I am adding a hysteresis(dead zone) which will stop the flicking of true false
+    #I am adding a hysteresis(dead zone) which will stop the flicking of true false    
     if not anti_crash:
-        if v.y < -2.0 and has_taken_off and drone.y < 12.0 and drone.y > 0.55:
+        if v.y < -3.0 and has_taken_off and drone.y < 12.0 and drone.y > 0.8 and flight_timer > 1.5 and not held_keys["shift"]:
             anti_crash = True
     else:
-        if v.y >= -0.2 or drone.y <= 0.52 or drone.y >= 15.0:
+        if v.y >= -0.3 or drone.y <= 0.75 or drone.y >= 15.0 or held_keys["shift"]: 
             anti_crash = False
 
     if anti_crash: #Pushing motors to maximum physical limit in a do or die situation
@@ -336,17 +351,36 @@ ui_y = (PANEL_TOP + PANEL_BOTTOM) / 2 - 0.5
 panel_frame = Entity(parent=camera.ui, model='quad', color=color.black66, scale=(ui_width + 0.02, ui_height + 0.02), x=ui_x, y=ui_y, z=-1, unlit=True, texture='white_cube')
 panel_text = Text(text="3RD PERSON VIEW", parent=camera.ui, scale=1.1, color=color.black, x=ui_x, y=ui_y - (ui_height / 2) - 0.03, origin=(0,0))
 
-#Cross as a navigation goal 
-cross1 = Entity(position=Vec3(50, 0.5, 50))
-horizontal_bar = Entity(parent=cross1, model='cube', scale=(4, 0.2, 1), color=color.red) #Horizontal bar of the cross
-vertical_bar = Entity(parent=cross1, model='cube', scale=(1, 0.2, 4), color=color.red) #Vertical bar of the cross
+#Crosses as a navigation goal 
+waypoints = [
+    Vec3(random.uniform(-200, 200), random.uniform(2, 20), random.uniform(-200, 200),),
+    Vec3(random.uniform(-200, 200), random.uniform(2, 20), random.uniform(-200, 200),),
+    Vec3(random.uniform(-200, 200), random.uniform(2, 20), random.uniform(-200, 200),),
+    Vec3(random.uniform(-200, 200), random.uniform(2, 20), random.uniform(-200, 200),)
+    ]
+
+current_waypoint_index = 0
+
+cross1 = Entity(position=waypoints[current_waypoint_index])
+horizontal_bar = Entity(parent=cross1, model='cube', scale=(10, 0.2, 1), color=color.red) 
+vertical_bar = Entity(parent=cross1, model='cube', scale=(1, 0.2, 7), color=color.red)
+
+'''
+#trees
+for i in range(50):
+    tree_x = random.uniform(-60, 60)
+    tree_z = random.uniform(-60, 60)
+    tree_height = random.uniform(10, 40)
+    if math.hypot(tree_x, tree_z) > 8: #if they are closer then 8 to the spawn then they won't be produced
+        tree = Entity(name='tree', model='cube', color=color.brown, scale=(5, tree_height, 5), position=(tree_x, 2.5, tree_z), collider='box')
+'''
 
 #hud panel with physical values
 hud_box_width = 0.50
-hud_box_height = 0.25
+hud_box_height = 0.20
 
 hud_panel = Entity(model='quad', parent=camera.ui, position=(-0.35 * screen_aspect, 0.30), color=color.black66, scale=(hud_box_width, hud_box_height), unlit=True, texture='white_cube', z=0)
-hud = Text(parent=camera.ui, text="", position=(-0.50 * screen_aspect, 0.42), color=color.white, scale=1.0, z=-1)
+hud = Text(parent=camera.ui, text="", position=(-0.50 * screen_aspect, 0.41), color=color.white, scale=1.0, z=-1)
 
 #Audios
 rotor_audio = Audio('drone_rotor_audio.wav', loop=True, autoplay=True, volume=0.0)
@@ -364,18 +398,36 @@ def input(key):
         auto_hover = not auto_hover
         if auto_hover:
             auto_hover_altitude = drone.y
+    '''
     if key == 'f':
         wind_fighter = not wind_fighter
-
+        if wind_fighter:
+            anchor_position = Vec3(drone.x, drone.y, drone.z)
+            #print(f"Wind Fighter Enabled. Holding Position at: {anchor_position}")
+    '''
+            
 def update():
+    #Here will be the main implementation: Physics and Game mechanics both
+    global T, v, Ang_v_RAD, torque_applied, target_yaw_rad, motor_speed_array, last_capture_time, anti_crash, has_taken_off #Global variables are required to be declared inside the func
+    global auto_hover, auto_hover_altitude, flight_timer, wind_fighter, anchor_position
+    global current_waypoint_index
+    global log_timer, csv_writer, csv_file
+
+    #Making pip size change with the aspect ratio
+    screen_aspect = window.aspect_ratio
+    ui_width = (PANEL_RIGHT - PANEL_LEFT) * screen_aspect
+    ui_height = PANEL_TOP - PANEL_BOTTOM
+    ui_x = ((PANEL_LEFT + PANEL_RIGHT) / 2 - 0.5) * screen_aspect
+    ui_y = (PANEL_TOP + PANEL_BOTTOM) / 2 - 0.5
+
+    panel_frame.scale = (ui_width + 0.02, ui_height + 0.02)
+    panel_frame.position = Vec3(ui_x, ui_y, -1)
+    panel_text.position = Vec3(ui_x, ui_y - (ui_height / 2) - 0.03, 0)
+
     #To follow the drone
     if third_cam_active:
         second_cam_entity.position = drone.position + Vec3(0, 3, -8)
         second_cam_entity.look_at(drone)
-
-    global T, v, Ang_v_RAD, torque_applied, target_yaw_rad, motor_speed_array, last_capture_time, anti_crash, has_taken_off #Global variables are required to be declared inside the func
-    global auto_hover, auto_hover_altitude
-    #Here will be the main implementation: Physics and Game mechanics both
 
     thrust_rate = 15
     torque_strength = 0.5 
@@ -416,16 +468,40 @@ def update():
     target_angle_pitch = (held_keys['w'] - held_keys['s']) * max_tilt  # X-axis (Pitch)
     target_angle_roll =  (held_keys['e'] - held_keys['q']) * max_tilt  # Z-axis (roll)
 
+    '''
     #Wind fighter
     if wind_fighter:
-        local_wind_x = wind_total_velocity.x * math.cos(current_angle_yaw) + wind_total_velocity.z * math.sin(current_angle_yaw) #formula in notes
-        local_wind_z = -wind_total_velocity.x * math.sin(current_angle_yaw) + wind_total_velocity.z * math.cos(current_angle_yaw) #formula in notes
+        if held_keys['w'] or held_keys['s'] or held_keys['e'] or held_keys['q']:
+            anchor_position = Vec3(drone.x, drone.y, drone.z)
+        else:
+            # World-space distance error from our locked anchor point
+            error_x = drone.x - anchor_position.x
+            error_z = drone.z - anchor_position.z
 
-        wind_pitch_offset = clamp(-local_wind_x * 0.04, -max_tilt, max_tilt)
-        wind_roll_offset = clamp(local_wind_z * 0.04, -max_tilt, max_tilt)
-        
-        target_angle_pitch += wind_pitch_offset
-        target_angle_roll += wind_roll_offset
+            #  Rotate world-space errors into the drone's body frame (Local X = Forward, Local Z = Right)
+            yaw_rad = math.radians(angleRange(drone.rotation_y))
+            cos_y = math.cos(yaw_rad)
+            sin_y = math.sin(yaw_rad)
+
+            local_error_x =  error_x * cos_y + error_z * sin_y
+            local_error_z = -error_x * sin_y + error_z * cos_y
+
+            # Rotate world velocity into local body frame for damping
+            local_vx = v.x * cos_y + v.z * sin_y
+            local_vz = -v.x * sin_y + v.z * cos_y
+
+            # PD Controller: Proportional gain pulls to position, Derivative gain kills momentum/oscillation
+            kp = 0.12  # Position correction gain
+            kd = 0.08  # Velocity damping gain
+
+            # To fix a positive position error (drifted forward), we need a negative pitch (pitch forward into wind)
+            correction_pitch = clamp(-(local_error_x * kp + local_vx * kd), -max_tilt, max_tilt)
+            # To fix a positive lateral error (drifted right), we need a positive roll (roll left)
+            correction_roll  = clamp( (local_error_z * kp + local_vz * kd), -max_tilt, max_tilt)
+
+            target_angle_pitch += correction_pitch
+            target_angle_roll  += correction_roll
+    '''
 
     error_pitch = target_angle_pitch - current_angle_pitch
     error_roll = target_angle_roll - current_angle_roll
@@ -464,6 +540,30 @@ def update():
     acceleration = f_net/ drone.mass #f = ma
     v += acceleration * time.dt #Eular Numerical part    
     drone.position += v * time.dt #Eular Numerical part 
+    
+    '''
+    #checking any crashes with obstacles(trees)
+    prev_position = drone.position
+    next_position = drone.position + (v * time.dt)
+    
+    crashed = False
+
+    for entity in scene.entities:
+        if entity.name == "tree":
+            horizontal_distance = math.hypot(next_position.x - entity.x, next_position.z - entity.z)
+            if horizontal_distance < (entity.scale.x * 1.2) and (0 <= next_position.y <= 7.0):
+                break
+
+    if crashed:
+        #If we crash, these things will happen: Kill velocity, bounce backward, drop thrust, sound alarm
+        drone.position = prev_position        
+        v = -v * 0.4 #bounce back
+        T = max(0.0, T - 10.0) #Drop in power
+        Ang_v_RAD *= 0.2 #spin slightly
+        anti_crash_audio.volume = 0.5 #Warning audio
+    else: 
+        drone.position = next_position
+    '''
 
     #if it collides with the ground
     if drone.y <= 0.5:
@@ -476,36 +576,28 @@ def update():
 
     if drone.y > 1.0:
         has_taken_off = True
-     
-    #Cross navigation system
+        flight_timer += time.dt
+
+        
+    #Cross navigation system and hud text
     display_altitude = drone.y - 0.5
 
-    if distance(drone, cross1) <= 2.0:
-        vertical_bar.color = color.green
-        horizontal_bar.color = color.green
-        hud.text = f"""
-            THRUST: {T:5.1f} N
-            ALTITUDE: {display_altitude:5.1f} m
-            SPEED: {v.length():5.1f} m/s
-            VELOCITY: ({v.x:4.1f}, {v.y:4.1f}, {v.z:4.1f}) m/s
-            AUTO HOVER: <green>{auto_hover}<default>
-            WIND FIGHTER: <green>{wind_fighter}<default>
-            {"<red>ANTI CRASH ENGAGED!<default>" if anti_crash else "ANTI CRASH: <green>False<default>"}
-            <green>Target Reached!<green>
-            """
-    else:
-        hud.text = f"""
-            THRUST: {T:5.1f} N
-            ALTITUDE: {display_altitude:5.1f} m
-            SPEED: {v.length():5.1f} m/s
-            VELOCITY: ({v.x:4.1f}, {v.y:4.1f}, {v.z:4.1f}) m/s
-            AUTO HOVER: <green>{auto_hover}<default>
-            WIND FIGHTER: <green>{wind_fighter}<default>
-            {"<red>ANTI CRASH ENGAGED!<default>" if anti_crash else "ANTI CRASH: <green>False<default>"}
-            <green>DISTANCE TO TARGET: {distance(drone, cross1):.1f}<default>            
-            """
+    if distance(drone, cross1) <= 2.5:
+        current_waypoint_index = (current_waypoint_index + 1) % len(waypoints)        
+        cross1.position = waypoints[current_waypoint_index]
+
+    distance_to_target = distance(drone, cross1)
+    hud.text = f"""
+        THRUST: {T:5.1f} N
+        ALTITUDE: {display_altitude:5.1f} m
+        SPEED: {v.length():5.1f} m/s
+        VELOCITY: ({v.x:4.1f}, {v.y:4.1f}, {v.z:4.1f}) m/s
+        AUTO HOVER: <green>{auto_hover}<default>
+        {"<red>ANTI CRASH ENGAGED!<default>" if anti_crash else "ANTI CRASH: <green>False<default>"}
+        <cyan>WAYPOINT [{current_waypoint_index + 1}/{len(waypoints)}] DIST: {distance_to_target:.1f}m<default>
+        """
         
-    #update_audio()
+    update_audio()
 
     #This is the reset key
     if held_keys['r']:  
@@ -519,6 +611,17 @@ def update():
         target_yaw_rad = 0.0
         actual_f_total = 0
 
+    #CSV flight data logging
+    log_timer += time.dt
+    if log_timer >= 1.0: #i am logging data every 1 second
+        log_timer = 0.0
+        csv_writer.writerow([
+            round(flight_timer, 2),
+            round(drone.x, 2), round(drone.y, 2), round(drone.z, 2),
+            round(v.x, 2), round(v.y, 2), round(v.z, 2),
+            round(T, 2), int(auto_hover), int(anti_crash)
+        ])
+
 #loop to manage rotor, wind, anti crash audios
 def update_audio():
     #Dynamic rotor audio
@@ -529,7 +632,7 @@ def update_audio():
     #Dynamic wind speed 
     windspeed = wind_total_velocity.length()
     wind_speed_ratio = clamp(windspeed / 35.0, 0.0, 1.0)
-    wind_audio.volume = clamp(wind_speed_ratio * 0.7, 0.0, 1.0)
+    wind_audio.volume = clamp(wind_speed_ratio * 1.2, 0.0, 1.0)
     wind_audio.pitch = 0.8 + (wind_speed_ratio * 0.4)
 
     #Anti crash audio
