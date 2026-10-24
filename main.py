@@ -13,7 +13,14 @@ import csv
 import datetime
 
 from ursina import *
-app = Ursina()
+app = Ursina(development_mode=False)
+
+window.title = 'SkyNav 3D: FPV Drone Simulator'  
+window.show_ursina_splash = False
+window.borderless = False                          
+window.show_ursina_splash = False                 
+window.fps_counter.enabled = False                
+window.exit_button.visible = False
 
 #keeps the angles between -180 and 180
 def angleRange(angle):
