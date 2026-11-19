@@ -67,6 +67,9 @@ To run this project on your local machine, follow these steps:
 
 ---
 
+## AI Usage
+Gemini was used for research purposes, debugging and sometimes code snippets. No direct copypasting without understanding the code first.
+
 ## Other Details
 - All physics equation gand Ursina details are documented the in the notes.md, and show the learning process behind each line of code. 
 - This project is half way done, and I am actively working on the second part i.e automation/computer vision
