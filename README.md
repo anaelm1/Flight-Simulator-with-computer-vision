@@ -73,4 +73,4 @@ Gemini was used for research purposes, debugging and sometimes code snippets. No
 ## Other Details
 - All physics equation gand Ursina details are documented the in the notes.md, and show the learning process behind each line of code. 
 - This project is half way done, and I am actively working on the second part i.e automation/computer vision
-- This project is being made in Hack Club Phantom. 
+- This project is being made in Hack Club Crossroads. 
