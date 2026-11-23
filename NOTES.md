@@ -488,3 +488,21 @@ steps:
 2. Then we apply the 2 formulas for x and z axis that will use the wind velocity vector to see what is the effect on the drone body itself.
 3. Then we will multiply the change into the target angles of pitch and roll
 with a slight increase.
+
+# AUTONOMOUS PART 
+So the objective is to buid 2 systems of autopilot. The first one with gps and the second with computer vision. 
+
+## GPS Autopilot
+I am gonna implement a function. It's going to need 3 things:
+    1. bearing relative to my heading 
+    2. horizontal distance
+    3. target altitude (this part already implemented for auto hover)
+It will then give:
+    1. angle pitch
+    2. angle yaw
+
+### Getting the bearing first
+The math is really advanced but basically I need to point an arrow to the target by target position - drone positin vectors and then normalize it which means its a unit vector. Here If the drone and target are on top of each other the arrow will be 0 and that will cause division by 0. that's why in that case I setting the bearing to 0 myself.
+Now I will use .dot (dot product): In this it tells us the direction of the vectors. eg if 2 arrows point the same exact way, the dot product is 1.0. if they are perpendicular, it will be 0.0 and if they are opposite it will be -1.0. so dot will get be the relation of my drone front angle and the arrow from drone to target.
+Then, cos on the dot product will give us the exact angle between them but it doesn't return position negative. 
+We use the cross product (idk that) for that and get the final angle

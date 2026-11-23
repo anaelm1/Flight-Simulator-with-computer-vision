@@ -4,6 +4,7 @@
 v = 3rd person window toggle
 r = reset the drone
 h = auto hover
+b = autopilot
 '''
 
 import math 
@@ -13,14 +14,14 @@ import csv
 import datetime
 
 from ursina import *
-app = Ursina(development_mode=False)
+app = Ursina() #development_mode=False
 
 window.title = 'SkyNav 3D: FPV Drone Simulator'  
 window.show_ursina_splash = False
-window.borderless = False                          
+#window.borderless = False                          
 window.show_ursina_splash = False                 
 window.fps_counter.enabled = False                
-window.exit_button.visible = False
+#window.exit_button.visible = False
 
 #keeps the angles between -180 and 180
 def angleRange(angle):
@@ -104,6 +105,8 @@ csv_writer = csv.writer(csv_file)
 csv_writer.writerow(['Time', 'PositionX', 'PositionY', 'PositionZ', 'VelocityX', 'VelocityY', 'VelocityZ', 'Thrust', 'AutoHover', 'WindFighter', 'AntiCrash'])
 log_timer = 0.0
 
+#AutoPilot
+auto_pilot = False
 
 #This will return 3D turbulence wind vector (u_g, v_g, w_g)
 def dryden_model(v_relative_mag, altitude, severity):
@@ -395,7 +398,7 @@ wind_audio = Audio('wind_audio.wav', loop=True, autoplay=True, volume=0.0)
 anti_crash_audio = Audio('anti_crash_audio.wav', loop=True, autoplay=True, volume=0.0)
 
 def input(key):
-    global third_cam_active, auto_hover, auto_hover_altitude, wind_fighter
+    global third_cam_active, auto_hover, auto_hover_altitude, auto_pilot
     if key == 'v':
         third_cam_active = not third_cam_active
         second_cam_panel.setActive(third_cam_active)
@@ -405,20 +408,16 @@ def input(key):
         auto_hover = not auto_hover
         if auto_hover:
             auto_hover_altitude = drone.y
-    '''
-    if key == 'f':
-        wind_fighter = not wind_fighter
-        if wind_fighter:
-            anchor_position = Vec3(drone.x, drone.y, drone.z)
-            #print(f"Wind Fighter Enabled. Holding Position at: {anchor_position}")
-    '''
-            
+    if key == 'b':
+        auto_pilot = not auto_pilot
+
 def update():
     #Here will be the main implementation: Physics and Game mechanics both
     global T, v, Ang_v_RAD, torque_applied, target_yaw_rad, motor_speed_array, last_capture_time, anti_crash, has_taken_off #Global variables are required to be declared inside the func
     global auto_hover, auto_hover_altitude, flight_timer, wind_fighter, anchor_position
     global current_waypoint_index
     global log_timer, csv_writer, csv_file
+    global auto_pilot
 
     #Making pip size change with the aspect ratio
     screen_aspect = window.aspect_ratio
@@ -450,10 +449,47 @@ def update():
             T = base_thrust + correction
             T = clamp(T, 0, 35)
 
+    #AutoPilot
+    waypoint_location = waypoints[current_waypoint_index]
+
+    #Relative bearing part
+    to_target = (waypoint_location - drone.world_position)
+    to_target.y = 0
+
+    horizontal_distance = to_target.length() # Horizontal distance
+    target_altitude = waypoint_location.y #Target altitude
+
+    if horizontal_distance == 0:
+        bearing = 0
+    to_target.normalize()
+
+    drone_forward = drone.forward
+    drone_forward.y = 0
+    if drone_forward.length() == 0:
+        if drone_forward.y < 0:
+            drone_forward = drone_forward.up
+        else: 
+            drone_forward = -drone_forward.up
+            drone_forward.y = 0
+    drone_forward.normalize()
+
+    dot = clamp(drone_forward.dot(to_target), -1, 1)
+    bearing = math.degrees(math.acos(dot))
+
+    cross_y = (drone_forward.x * to_target.z) - (drone_forward.z * to_target.x)
+    if cross_y < 0:
+        bearing = -bearing
+
+    #print(bearing)
+
     #Thrust control 
     T += held_keys["space"] * time.dt * thrust_rate
     T -= held_keys["shift"] * time.dt * thrust_rate
     T = clamp(T, 0, 35)
+
+    if auto_pilot:
+        T = auto_pilot_func(bearing, horizontal_distance, target_altitude)
+
 
     #Yaw stabalization
     current_angle_yaw = math.radians(angleRange(drone.rotation_y))
@@ -474,41 +510,6 @@ def update():
 
     target_angle_pitch = (held_keys['w'] - held_keys['s']) * max_tilt  # X-axis (Pitch)
     target_angle_roll =  (held_keys['e'] - held_keys['q']) * max_tilt  # Z-axis (roll)
-
-    '''
-    #Wind fighter
-    if wind_fighter:
-        if held_keys['w'] or held_keys['s'] or held_keys['e'] or held_keys['q']:
-            anchor_position = Vec3(drone.x, drone.y, drone.z)
-        else:
-            # World-space distance error from our locked anchor point
-            error_x = drone.x - anchor_position.x
-            error_z = drone.z - anchor_position.z
-
-            #  Rotate world-space errors into the drone's body frame (Local X = Forward, Local Z = Right)
-            yaw_rad = math.radians(angleRange(drone.rotation_y))
-            cos_y = math.cos(yaw_rad)
-            sin_y = math.sin(yaw_rad)
-
-            local_error_x =  error_x * cos_y + error_z * sin_y
-            local_error_z = -error_x * sin_y + error_z * cos_y
-
-            # Rotate world velocity into local body frame for damping
-            local_vx = v.x * cos_y + v.z * sin_y
-            local_vz = -v.x * sin_y + v.z * cos_y
-
-            # PD Controller: Proportional gain pulls to position, Derivative gain kills momentum/oscillation
-            kp = 0.12  # Position correction gain
-            kd = 0.08  # Velocity damping gain
-
-            # To fix a positive position error (drifted forward), we need a negative pitch (pitch forward into wind)
-            correction_pitch = clamp(-(local_error_x * kp + local_vx * kd), -max_tilt, max_tilt)
-            # To fix a positive lateral error (drifted right), we need a positive roll (roll left)
-            correction_roll  = clamp( (local_error_z * kp + local_vz * kd), -max_tilt, max_tilt)
-
-            target_angle_pitch += correction_pitch
-            target_angle_roll  += correction_roll
-    '''
 
     error_pitch = target_angle_pitch - current_angle_pitch
     error_roll = target_angle_roll - current_angle_roll
@@ -600,11 +601,12 @@ def update():
         SPEED: {v.length():5.1f} m/s
         VELOCITY: ({v.x:4.1f}, {v.y:4.1f}, {v.z:4.1f}) m/s
         AUTO HOVER: <green>{auto_hover}<default>
+        AUTO PILOT: <green>{auto_pilot}<default>
         {"<red>ANTI CRASH ENGAGED!<default>" if anti_crash else "ANTI CRASH: <green>False<default>"}
         <cyan>WAYPOINT [{current_waypoint_index + 1}/{len(waypoints)}] DIST: {distance_to_target:.1f}m<default>
         """
         
-    update_audio()
+    #update_audio()
 
     #This is the reset key
     if held_keys['r']:  
@@ -647,6 +649,14 @@ def update_audio():
         anti_crash_audio.volume = 0.5
     else:
         anti_crash_audio.volume = 0.0
+
+def auto_pilot_func(bearing, distance, altitude):
+    base_thrust = drone.mass * 9.81 #base counterforce
+    altitude_error = altitude - drone.y
+    correction = (altitude_error * P) - (v.y * D) #formula in notes
+    T = base_thrust + correction
+    T = clamp(T, 0, 35)
+    return T
 
 app.run()  
 
